@@ -249,5 +249,15 @@ def run_twoparty_mobile(platform: str, call_type: str, web_url: str, shot_dir: s
 def run_e2e(cmd: str, repo_dir: Path) -> dict:
     if not cmd:
         return {"ran": False, "passed": None, "note": "e2e: not-configured", "tail": ""}
+    # The default smoke is a Playwright web test. Only run it where Playwright is actually set up
+    # (Node web stacks). For a Flutter/native web with no Playwright, skip → the caller falls back to
+    # the page-200 health signal, instead of failing the gate on a missing test runner.
+    if "playwright" in cmd:
+        has_pw = any((repo_dir / f).exists() for f in
+                     ("playwright.config.ts", "playwright.config.js", "playwright.config.mjs")) or \
+                 ("@playwright/test" in (repo_dir / "package.json").read_text()
+                  if (repo_dir / "package.json").exists() else False)
+        if not has_pw:
+            return {"ran": False, "passed": None, "note": "e2e: no Playwright setup (non-Node web) — page-200 fallback", "tail": ""}
     code, out = _run(shlex.split(cmd), cwd=str(repo_dir), timeout=1800)
     return {"ran": True, "passed": code == 0, "exitCode": code, "tail": _tail(out)}
