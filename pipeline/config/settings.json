@@ -13,7 +13,8 @@
     "provision": "claude-opus-4-8",
     "build": "claude-sonnet-4-6",
     "integrate": "claude-sonnet-4-6",
-    "judge": "claude-opus-4-8"
+    "judge": "claude-opus-4-8",
+    "vision": "claude-sonnet-4-6"
   },
   "max_turns": {
     "spec": 20,
@@ -66,10 +67,12 @@
     },
     "e2e_note": "Commands run in the repo/component dir. The build/integrate LLM authors the actual specs (e2e/*.spec.ts, e2e/*.flow.yaml). Empty = recorded not-configured. Install: npm i -D @playwright/test && npx playwright install; brew install maestro.",
     "backend_url": "http://localhost:8080",
-    "web_url": "http://localhost:3000"
+    "web_url": "http://localhost:3000",
+    "vision_review": true
   },
   "checkpoints": {
     "cp1_after": "boot",
     "cp2_after": "verify"
-  }
+  },
+  "baselines_dir": "~/Desktop/automate/pipeline-state/baselines"
 }

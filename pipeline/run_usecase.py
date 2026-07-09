@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 import time  # noqa: E402
-from lib import claude_runner, gates, prompts, state, verify, gaps, readiness, mobile, cometchat  # noqa: E402
+from lib import claude_runner, gates, prompts, state, verify, gaps, readiness, mobile, cometchat, shotreview  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 AUTOMATE_ROOT = HERE.parent
@@ -460,6 +460,20 @@ def stage_verify(S, uc):
     twoparty_ok = bool(matrix.get("ok"))
     # STEP 5 — AI moderation probe (functional: send flagged content, observe if masked/blocked/flagged)
     moderation = cometchat.check_moderation(str(ENV_FILE), uc["slug"]) if healthy else {"active": False, "error": "not healthy"}
+    # STEP 6 — VISION + BASELINE review of the captured screenshots (advisory, not a hard gate).
+    # "is it correct?" (Claude-vision rubric) + "did it change?" (perceptual baseline). Catches the
+    # visual bugs DOM selectors miss (bottom-left ring, chat bleed, app header over the call) and
+    # emits a self-contained HTML gallery for CP review. Off by settings if verify.vision_review=false.
+    shot_review = {"skipped": True}
+    if healthy and S.get("verify", {}).get("vision_review", True):
+        demo_dir = repo / "_demo"
+        candidates = [("web-call", shot, "ongoing_call", "web ongoing call")]
+        for tag in ("voice", "video"):
+            candidates += [(f"callee-ringing-{tag}", str(demo_dir / f"callee-ringing-{tag}.png"), "incoming_ring", f"web {tag} incoming"),
+                           (f"callee-ongoing-{tag}", str(demo_dir / f"callee-ongoing-{tag}.png"), "ongoing_call", f"web {tag} ongoing")]
+        shots = [{"name": n, "path": p, "rubric": r, "context": c} for n, p, r, c in candidates if os.path.exists(p)]
+        if shots:
+            shot_review = shotreview.review(shots, uc["slug"], S, str(demo_dir / "shot-review.html"))
     integratedUp = bool(dockerUp and healthy and sdk_ok)
     refuted = not (chat_ok and call_ok)                              # objective machine evidence, not a self-report
     td = verify.compose_down(repo) if dockerUp else {"dockerCleanupDone": True}
@@ -472,6 +486,8 @@ def stage_verify(S, uc):
                           "masked": moderation.get("masked"), "blocked": moderation.get("blocked")},
            "reason": "chat+call proven in browser" if not refuted else f"e2e incomplete: {e2e}",
            "easeScore": 5 if (chat_ok and call_ok) else (3 if chat_ok else 1),
+           "shotReview": {"allCorrect": shot_review.get("allCorrect"), "anyChanged": shot_review.get("anyChanged"),
+                          "gallery": shot_review.get("gallery"), "results": shot_review.get("results")},
            "retryCount": retry, "dockerCleanupDone": td.get("dockerCleanupDone"), "e2e": e2e, "callScreenshot": shot}
     state.write(S, uc["slug"], "verify", res)
     # Classify each auto-detected issue by CAUSE before recording. The curated skills ledger
@@ -490,6 +506,9 @@ def stage_verify(S, uc):
     if healthy and not moderation.get("active"):
         notes.append(f"[setup] AI moderation not observed — {moderation.get('note')} "
                      f"(enable the moderation/data-masking extension in the CometChat dashboard)")
+    if shot_review.get("allCorrect") is False:  # vision judge flagged a visual issue on a captured shot
+        bad = [f"{r['name']}({','.join(r['failedChecks'])})" for r in shot_review.get("results", []) if r.get("correct") is False]
+        notes.append(f"[visual] Claude-vision flagged shot(s): {', '.join(bad)} — see gallery {shot_review.get('gallery')}")
     if notes:
         notes_dir = os.path.join(os.path.dirname(os.path.expanduser(S["gaps_dir"])), "pipeline-notes")
         os.makedirs(notes_dir, exist_ok=True)
@@ -500,7 +519,7 @@ def stage_verify(S, uc):
         die_gate(f"verify:{uc['slug']} (integratedUp={integratedUp}, refuted={refuted}) tag=skills")
     print(f"OK verify:{uc['slug']} chat={chat_ok} call={call_ok} "
           f"2party(v/vid)={call_matrix['web-web']['voice']}/{call_matrix['web-web']['video']} "
-          f"mod={moderation.get('active')} ease={res['easeScore']}"); return res
+          f"mod={moderation.get('active')} vision={shot_review.get('allCorrect')} ease={res['easeScore']}"); return res
 
 
 def stage_push_branch(S, uc):

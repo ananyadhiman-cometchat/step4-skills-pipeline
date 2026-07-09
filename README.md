@@ -56,6 +56,28 @@ Gates live in `pipeline/lib/gates.py`; a failed gate exits non-zero and the cond
 
 ---
 
+## Screenshot testing — vision + baseline
+
+DOM selectors proved brittle (kit class names differ per surface/platform) and the subtle visual
+bugs (bottom-left call ring, chat bleeding under a call, app header over a full-screen call) were
+only caught by a human eyeballing shots. Two complementary layers now automate that:
+
+- **`lib/vision.py` — "is it correct?"** Claude-vision grades each screenshot against a named
+  RUBRIC (`incoming_ring`, `ongoing_call`, `chat_thread`, `feed_loaded`, …) → structured
+  per-check pass/fail with reasons. No selectors, no human in the loop. Reuses the pipeline's
+  `claude -p` auth (no API key). Rubrics are position/platform tolerant (a centered web modal AND
+  an android top-banner pass; only a corner-toast fails).
+- **`lib/visual_baseline.py` — "did it change?"** Perceptual dHash + normalized pixel diff vs a
+  stored golden (first run establishes it). Backend is pluggable: `local` (default, Pillow, offline)
+  or `applitools`/`percy` when `APPLITOOLS_API_KEY`/`PERCY_TOKEN` is set.
+- **`lib/shotreview.py`** runs both over a shot set and emits a self-contained **HTML gallery**
+  (images inlined) for CP1/CP2 review, plus a compact machine summary folded into `verify.json`.
+
+Wired into `stage_verify` (advisory, not a hard gate — `verify.vision_review` in settings). Visual
+issues are recorded to `pipeline-state/pipeline-notes/<slug>.md`, never the skills ledger.
+
+---
+
 ## Setup
 
 1. **Clone the CometChat skills catalog** next to this repo (the pipeline loads it as invocable skills):
