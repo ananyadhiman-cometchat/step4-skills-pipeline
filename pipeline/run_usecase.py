@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 import time  # noqa: E402
-from lib import claude_runner, gates, prompts, state, verify, gaps, readiness, mobile, cometchat, shotreview  # noqa: E402
+from lib import claude_runner, gates, prompts, state, verify, gaps, readiness, mobile, cometchat, shotreview, selfheal  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 AUTOMATE_ROOT = HERE.parent
@@ -215,6 +215,14 @@ def stage_build(S, uc):
         r = claude_runner.run_headless(prompts.render_build(S, uc, c), settings=S, phase="A",
                                        cwd=cdir, model_key="build", label=f"build-{c['name']}", log_dir=logs)
         g = verify.build_gate(c["kind"], cdir)
+        # SELF-HEAL: if the gate failed with a known UC1 signature, auto-repair + retry once — no human.
+        if g["buildExitCode"] != 0:
+            healed = selfheal.heal({"stage": "build", "kind": c["kind"], "stack": c["stack"],
+                                    "repo_dir": repo, "comp_dir": cdir, "mobile_dir": cdir,
+                                    "env_file": str(ENV_FILE), "integrated": False}, g["outputTail"])
+            if healed:
+                print(f"  self-heal build:{c['name']} → {[h['rule'] for h in healed]}; retrying")
+                g = verify.build_gate(c["kind"], cdir); g["selfHealed"] = [h["rule"] for h in healed]
         runs.append({**c, **r, **g}); worst = max(worst, g["buildExitCode"])  # compile is authoritative, not agent exit
     sha = ""
     if worst == 0:
@@ -282,10 +290,14 @@ def stage_demo(S, uc):
     if mdir:  # RN (Expo). Standalone RELEASE builds — no Metro/Watchman at runtime.
         print("building mobile release apps (prebuild --clean → gradle/xcode release)…")
         mobile.prebuild_clean(mdir)
-        mobile.enable_cleartext(mdir)  # release builds block HTTP by default; local backend is HTTP
-        if integrated:  # bake the REAL CometChat creds so the SDK doesn't dial the placeholder host
-            if mobile.write_cometchat_env(mdir, cometchat._cfg(str(ENV_FILE))):
-                print("  injected real CometChat creds into mobile/.env (else socket dials placeholder → no calls)")
+        # SELF-HEAL proactive guards (cleartext HTTP + real CometChat creds, stack-aware) — the UC1
+        # fixes applied automatically so the known bugs never recur, on any mobile stack.
+        rn_stack = uc.get("mobile") or uc.get("app") or "React Native"
+        guards = selfheal.preapply({"stage": "demo", "kind": "mobile", "stack": rn_stack,
+                                    "repo_dir": repo, "comp_dir": mdir, "mobile_dir": mdir,
+                                    "env_file": str(ENV_FILE), "integrated": integrated})
+        if guards:
+            print(f"  self-heal guards: {[g['rule'] for g in guards]}")
         if mobile.boot_android():
             b = mobile.build_android(mdir, "http://10.0.2.2:8080/api")  # emulator → host
             p = str(demo / "android.png")
