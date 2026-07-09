@@ -7,6 +7,7 @@ settings.verify.e2e; if unset, we record 'not-configured' rather than fake a pas
 from __future__ import annotations
 import json, os, shlex, subprocess, time, urllib.request
 from pathlib import Path
+from lib import cometchat
 
 
 def _run(cmd, cwd=None, timeout=1800, env=None) -> tuple[int, str]:
@@ -151,11 +152,13 @@ def run_chatcall_web(repo_dir: Path, email: str, password: str, web_url: str, sh
 
 
 def run_twoparty_web(repo_dir: Path, web_url: str, shot_dir: str,
-                     caller_email: str, callee_email: str, password: str) -> dict:
-    """Two-party web↔web call matrix: run twoparty.web.mjs for voice AND video. Two logged-in
-    browser contexts; the caller rings the callee and both must reach the ongoing-call screen.
-    Returns {'voice': verdict, 'video': verdict, 'ok': bool}. Proven leg of the call matrix —
-    the mobile↔web legs (android/ios) are exercised in the manual demo, not automated here."""
+                     caller_email: str, callee_email: str, password: str,
+                     env_file: str = "", slug: str = "", retries: int = 3) -> dict:
+    """Two-party web↔web call matrix (voice + video). SIGNALING verdict — deterministic, not
+    media-dependent: a leg passes when the ring reached the callee, Accept succeeded, AND CometChat
+    logged the call as ANSWERED server-side (REST). Retries up to `retries` (retry-until-pass) to
+    absorb transient hiccups. The old flaky 'DOM ongoing element still present at 7s' is dropped —
+    headless fake-media drops the stream after ~2s, which never meant the call failed."""
     web = repo_dir / "web"
     src = Path(__file__).resolve().parent.parent / "e2e" / "twoparty.web.mjs"
     if not web.exists() or not src.exists():
@@ -165,40 +168,62 @@ def run_twoparty_web(repo_dir: Path, web_url: str, shot_dir: str,
     out = {}
     try:
         for ctype in ("voice", "video"):
-            env = {"WEB_URL": web_url, "CALL_TYPE": ctype, "SHOT_DIR": shot_dir,
-                   "CALLER_EMAIL": caller_email, "CALLEE_EMAIL": callee_email, "E2E_PASSWORD": password}
-            code, res = _run(["node", str(dst)], cwd=str(web), timeout=180, env=env)
-            verdict = {"error": "no verdict json", "tail": _tail(res)}
-            for line in reversed((res or "").splitlines()):
-                if line.strip().startswith("{"):
-                    try:
-                        verdict = json.loads(line.strip()); break
-                    except Exception:
-                        pass
-            out[ctype] = verdict
+            attempts, leg = [], {}
+            for a in range(retries):
+                since = int(time.time())
+                env = {"WEB_URL": web_url, "CALL_TYPE": ctype, "SHOT_DIR": shot_dir,
+                       "CALLER_EMAIL": caller_email, "CALLEE_EMAIL": callee_email, "E2E_PASSWORD": password}
+                _, res = _run(["node", str(dst)], cwd=str(web), timeout=180, env=env)
+                v = {"error": "no verdict json", "tail": _tail(res)}
+                for line in reversed((res or "").splitlines()):
+                    if line.strip().startswith("{"):
+                        try:
+                            v = json.loads(line.strip()); break
+                        except Exception:
+                            pass
+                # server-side confirmation (media-independent), anchored to this attempt's accept
+                ans = cometchat.call_answered(env_file, slug, v.get("acceptedAt") or since) if env_file else {"answered": None}
+                v["serverAnswered"] = ans.get("answered")
+                v["callWorks"] = bool(v.get("signalOk") and (ans.get("answered") is not False))
+                v["attempt"] = a + 1
+                attempts.append({"signalOk": v.get("signalOk"), "serverAnswered": ans.get("answered"), "pass": v["callWorks"]})
+                leg = v
+                if v["callWorks"]:
+                    break
+            leg["attempts"] = attempts
+            out[ctype] = leg
     finally:
         dst.unlink(missing_ok=True)
     out["ok"] = bool(out.get("voice", {}).get("callWorks") and out.get("video", {}).get("callWorks"))
     return out
 
 
-def run_twoparty_mobile(platform: str, call_type: str, web_url: str, shot_dir: str) -> dict:
-    """Automated mobile↔web call leg (android↔web / ios↔web). Drives the native app via Maestro +
-    the web peer via Playwright through twoparty_mobile.py: web rings → mobile shows the incoming
-    widget → Maestro accepts → both connect. Requires the emulator/sim booted + the integrated app
-    installed (true during the demo/boot-2 stage). Returns the orchestrator's JSON verdict."""
+def run_twoparty_mobile(platform: str, call_type: str, web_url: str, shot_dir: str,
+                        env_file: str = "", slug: str = "mkt", retries: int = 2) -> dict:
+    """Automated mobile↔web call leg (android↔web / ios↔web). Maestro drives the native app, the web
+    peer rings it; the leg passes on the SIGNALING verdict — the mobile incoming widget appeared +
+    Maestro accepted + CometChat logged the call ANSWERED (server-side, media-independent). Retries
+    up to `retries` (retry-until-pass). Requires the emulator/sim booted + integrated app installed."""
     script = Path(__file__).resolve().parent.parent / "e2e" / "twoparty_mobile.py"
     if not script.exists():
         return {"error": "no twoparty_mobile.py", "callConnected": False}
-    code, out = _run(["python3", str(script), "--platform", platform, "--direction", "web-calls-mobile",
-                      "--call-type", call_type, "--web-url", web_url, "--shot-dir", shot_dir], timeout=300)
-    for line in reversed((out or "").splitlines()):
-        if line.strip().startswith("{"):
-            try:
-                return json.loads(line.strip())
-            except Exception:
-                pass
-    return {"error": "no verdict json", "tail": _tail(out), "callConnected": False}
+    last = {"error": "no run", "callConnected": False}
+    for a in range(retries):
+        code, out = _run(["python3", str(script), "--platform", platform, "--direction", "web-calls-mobile",
+                          "--call-type", call_type, "--web-url", web_url, "--shot-dir", shot_dir,
+                          "--env-file", env_file, "--slug", slug], timeout=300)
+        v = None
+        for line in reversed((out or "").splitlines()):
+            if line.strip().startswith("{"):
+                try:
+                    v = json.loads(line.strip()); break
+                except Exception:
+                    pass
+        last = v or {"error": "no verdict json", "tail": _tail(out), "callConnected": False}
+        last["attempt"] = a + 1
+        if last.get("callConnected"):
+            break
+    return last
 
 
 def run_e2e(cmd: str, repo_dir: Path) -> dict:

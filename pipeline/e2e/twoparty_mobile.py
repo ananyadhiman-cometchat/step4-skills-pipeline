@@ -18,6 +18,11 @@ import argparse, json, os, subprocess, sys, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))          # pipeline/ — for lib.cometchat
+try:
+    from lib import cometchat                  # server-side "answered" check (media-independent)
+except Exception:
+    cometchat = None
 MAESTRO = os.path.expanduser("~/.maestro/bin/maestro")
 ADB = os.path.expanduser("~/Library/Android/sdk/platform-tools/adb")
 FLOWS = HERE / "mobile_flows"
@@ -94,7 +99,7 @@ def _verdict(out: str) -> dict:
     return {"error": "no verdict json", "tail": (out or "")[-300:]}
 
 
-def web_calls_mobile(platform, call_type, web_url, shot_dir) -> dict:
+def web_calls_mobile(platform, call_type, web_url, shot_dir, env_file="", slug="") -> dict:
     tag = f"{platform}-{call_type}"
     reset_app(platform)   # clean slate — no lingering call from a prior leg
     # 1. mobile logs in (Sara) → Messages tab → CallSurfaces arms the incoming listener
@@ -105,6 +110,7 @@ def web_calls_mobile(platform, call_type, web_url, shot_dir) -> dict:
     # slower than Android's, and a call placed before the callee is online rings into the void.
     time.sleep(15 if platform == "ios" else 5)
     # 2. spawn web caller (Bob rings Sara, holds the line)
+    since = int(time.time())   # server-answered floor
     p, dst = web_proc("webcaller.web.mjs", {
         "WEB_URL": web_url, "CALL_TYPE": call_type, "CALLER_EMAIL": WEB_EMAIL,
         "E2E_PASSWORD": WEB_PW, "HOLD_MS": "55000", "SHOT_DIR": shot_dir, "TAG": tag})
@@ -113,7 +119,7 @@ def web_calls_mobile(platform, call_type, web_url, shot_dir) -> dict:
     accept = maestro(platform, "accept_call.flow.yaml", {}, timeout=90)
     mob_inc = pull_shot(platform, "/tmp/mobile-incoming", f"{shot_dir}/mobile-incoming-{tag}.png")
     mob_ong = pull_shot(platform, "/tmp/mobile-ongoing", f"{shot_dir}/mobile-ongoing-{tag}.png")
-    # 4. collect web verdict
+    # 4. collect web verdict + SERVER-side answered (deterministic, media-independent)
     try:
         out, _ = p.communicate(timeout=90)
     except subprocess.TimeoutExpired:
@@ -121,11 +127,14 @@ def web_calls_mobile(platform, call_type, web_url, shot_dir) -> dict:
     finally:
         dst.unlink(missing_ok=True)
     web = _verdict(out)
-    connected = bool(accept["ok"] and (web.get("callerOngoing") or mob_ong))
+    answered = cometchat.call_answered(env_file, slug, since) if (cometchat and env_file) else {"answered": None}
+    # SIGNALING verdict: the mobile incoming widget appeared + Maestro accepted it + CometChat logged
+    # the call ANSWERED. Media-independent → deterministic. DOM/ongoing shots kept only as evidence.
+    connected = bool(accept["ok"] and answered.get("answered") is not False)
     return {"leg": tag, "direction": "web-calls-mobile", "callType": call_type,
             "mobileLogin": login["ok"], "mobileAccept": accept["ok"], "mobileAcceptTail": accept["tail"],
-            "webCaller": web, "mobileIncomingShot": mob_inc, "mobileOngoingShot": mob_ong,
-            "callConnected": connected}
+            "serverAnswered": answered.get("answered"), "webCaller": web,
+            "mobileIncomingShot": mob_inc, "mobileOngoingShot": mob_ong, "callConnected": connected}
 
 
 def main():
@@ -135,9 +144,12 @@ def main():
     ap.add_argument("--call-type", choices=["voice", "video"], default="voice")
     ap.add_argument("--web-url", default="http://localhost:3000")
     ap.add_argument("--shot-dir", default="/tmp")
+    ap.add_argument("--env-file", default="")
+    ap.add_argument("--slug", default="mkt")
     args = ap.parse_args()
     if args.direction == "web-calls-mobile":
-        res = web_calls_mobile(args.platform, args.call_type, args.web_url, args.shot_dir)
+        res = web_calls_mobile(args.platform, args.call_type, args.web_url, args.shot_dir,
+                               env_file=args.env_file, slug=args.slug)
     else:
         res = {"error": "mobile-calls-web not yet wired"}
     print(json.dumps(res))

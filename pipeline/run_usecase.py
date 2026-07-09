@@ -303,7 +303,8 @@ def stage_demo(S, uc):
             for plat in ("android", "ios"):
                 if plat in shots and shots[plat].get("ok"):
                     for ct in ("voice", "video"):
-                        r = verify.run_twoparty_mobile(plat, ct, web_url, str(demo))
+                        r = verify.run_twoparty_mobile(plat, ct, web_url, str(demo),
+                                                       env_file=str(ENV_FILE), slug=uc["slug"])
                         mobile_calls[f"{plat}-{ct}"] = bool(r.get("callConnected"))
                         print(f"  call-matrix {plat}↔web {ct}: connected={r.get('callConnected')}")
         mobile.cleanup_build_artifacts(mdir)  # reclaim multi-GB transients (DerivedData/docker cache)
@@ -450,7 +451,8 @@ def stage_verify(S, uc):
     # mobile↔web call automation isn't proven, so we record those legs as manual rather than fake them.
     caller_email = uc.get("e2eCallerEmail", "bob.buyer@mkt.io"); callee_email = uc.get("e2eCalleeEmail", "sara.seller@mkt.io")
     matrix = verify.run_twoparty_web(repo, V.get("web_url", "http://localhost:3000"),
-                                     str(repo / "_demo"), caller_email, callee_email, password) if healthy else {"ok": False, "error": "not healthy"}
+                                     str(repo / "_demo"), caller_email, callee_email, password,
+                                     env_file=str(ENV_FILE), slug=uc["slug"]) if healthy else {"ok": False, "error": "not healthy"}
     call_matrix = {
         "web-web": {"voice": bool(matrix.get("voice", {}).get("callWorks")),
                     "video": bool(matrix.get("video", {}).get("callWorks")), "mode": "automated"},

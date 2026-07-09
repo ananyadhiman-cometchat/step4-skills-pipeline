@@ -90,6 +90,28 @@ def check_moderation(env_file, slug) -> dict:
             "note": "moderation active" if active else "no moderation transform observed (extension likely not enabled in dashboard)"}
 
 
+def call_answered(env_file, slug, since_ts, poll_s: int = 12) -> dict:
+    """Deterministic 'was the call answered?' — reads CometChat's SERVER-side call log via REST,
+    independent of whether the browsers' WebRTC MEDIA held. Call messages carry an `action`:
+    initiated → ongoing (ANSWERED) → ended. We look for an `ongoing` action newer than `since_ts`.
+    Polls briefly because the server-side action lands a beat after the client accepts.
+    Returns {answered, action?, sentAt?}. This is the anti-flake verdict for the headless call e2e."""
+    import time
+    cfg = _cfg(env_file)
+    buyer = f"{slug}-buy-001"
+    url = f"{_api(cfg)}/messages?per_page=40&category=call"
+    deadline = time.time() + poll_s
+    while True:
+        code, resp = _req(url, cfg, method="GET", on_behalf=buyer)
+        for m in (resp.get("data", []) if isinstance(resp, dict) else []):
+            action = (m.get("data", {}) or {}).get("action")
+            if action == "ongoing" and int(m.get("sentAt", 0)) >= int(since_ts):
+                return {"answered": True, "action": action, "sentAt": m.get("sentAt"), "type": m.get("type")}
+        if time.time() >= deadline:
+            return {"answered": False}
+        time.sleep(2)
+
+
 def seed_conversation(env_file, slug) -> dict:
     """Seed two namespaced users + a message between them → a real conversation to test."""
     cfg = _cfg(env_file)
