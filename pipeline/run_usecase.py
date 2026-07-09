@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 import time  # noqa: E402
-from lib import claude_runner, gates, prompts, state, verify, gaps, readiness, mobile, cometchat, shotreview, selfheal  # noqa: E402
+from lib import claude_runner, gates, prompts, state, verify, gaps, readiness, mobile, cometchat, shotreview, selfheal, providers  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 AUTOMATE_ROOT = HERE.parent
@@ -284,45 +284,36 @@ def stage_demo(S, uc):
         if "web" in kinds:
             p = str(demo / "web.png")
             shots["web"] = {"ok": _web_shot(repo, p), "path": p}
-    # 2. mobile — RN 'mobile' dir builds both platforms; Flutter 'app'; native android/ios TODO
+    # 2. mobile / native clients — dispatch to the STACK PROVIDER per component (RN / Flutter /
+    #    native Android / native iOS). Each provider self-heals (cleartext + creds), builds, installs,
+    #    launches and screenshots — the demo stage is no longer RN-only.
     mobile_calls = {}
-    mdir = repo / "mobile" if (repo / "mobile").exists() else None
-    if mdir:  # RN (Expo). Standalone RELEASE builds — no Metro/Watchman at runtime.
-        print("building mobile release apps (prebuild --clean → gradle/xcode release)…")
-        mobile.prebuild_clean(mdir)
-        # SELF-HEAL proactive guards (cleartext HTTP + real CometChat creds, stack-aware) — the UC1
-        # fixes applied automatically so the known bugs never recur, on any mobile stack.
-        rn_stack = uc.get("mobile") or uc.get("app") or "React Native"
-        guards = selfheal.preapply({"stage": "demo", "kind": "mobile", "stack": rn_stack,
-                                    "repo_dir": repo, "comp_dir": mdir, "mobile_dir": mdir,
-                                    "env_file": str(ENV_FILE), "integrated": integrated})
-        if guards:
-            print(f"  self-heal guards: {[g['rule'] for g in guards]}")
-        if mobile.boot_android():
-            b = mobile.build_android(mdir, "http://10.0.2.2:8080/api")  # emulator → host
-            p = str(demo / "android.png")
-            ok = mobile.install_launch_shot_android(b["apk"], p) if b.get("apk") else False
-            shots["android"] = {"ok": ok, "path": p, "buildExit": b["exitCode"], "tail": b["tail"]}
-        mobile.boot_ios()
-        b = mobile.build_ios(mdir, "http://localhost:8080/api")  # simulator → localhost
-        p = str(demo / "ios.png")
-        ok = mobile.install_launch_shot_ios(b["app"], p) if b.get("app") else False
-        shots["ios"] = {"ok": ok, "path": p, "buildExit": b["exitCode"], "tail": b["tail"]}
-        # AUTOMATED mobile↔web call matrix (boot-2): web rings the native app, Maestro accepts,
-        # both connect. Devices are booted + integrated apps installed here — the right place to run it.
-        if integrated:
-            web_url = V.get("web_url", "http://localhost:3000")
-            for plat in ("android", "ios"):
-                if plat in shots and shots[plat].get("ok"):
-                    for ct in ("voice", "video"):
-                        r = verify.run_twoparty_mobile(plat, ct, web_url, str(demo),
-                                                       env_file=str(ENV_FILE), slug=uc["slug"])
-                        mobile_calls[f"{plat}-{ct}"] = bool(r.get("callConnected"))
-                        print(f"  call-matrix {plat}↔web {ct}: connected={r.get('callConnected')}")
-        mobile.cleanup_build_artifacts(mdir)  # reclaim multi-GB transients (DerivedData/docker cache)
-        print(f"  post-build cleanup done; disk free: {mobile.disk_free_gb()}GB")
-    elif (repo / "app").exists():
-        shots["mobile"] = {"ok": False, "note": "Flutter (app/) demo build — add flutter run per archetype"}
+    api_a = V.get("api_android", "http://10.0.2.2:8080/api")   # android emulator → host
+    api_i = V.get("api_ios", "http://localhost:8080/api")      # ios simulator → localhost
+    for c in prompts.expand_components(uc):
+        if c["kind"] not in ("mobile", "app", "android", "ios"):
+            continue
+        prov = providers.mobile_provider(c["kind"], c["stack"])
+        if not prov:
+            shots[c["name"]] = {"ok": False, "note": f"no demo provider for {c['kind']}/{c['stack']}"}
+            continue
+        print(f"demo provider [{prov.family}] for {c['name']} ({c['stack']})…")
+        ctx = {"app_dir": repo / c["dir"], "repo_dir": repo, "demo_dir": demo,
+               "kind": c["kind"], "stack": c["stack"], "api_android": api_a, "api_ios": api_i,
+               "api_web": "/api", "integrated": integrated, "env_file": str(ENV_FILE), "settings": S}
+        for plat, shot in prov.demo(ctx).items():   # android / ios / web
+            shots[plat] = shot
+    # AUTOMATED mobile↔web call matrix (boot-2) — android/ios clients that built OK ring the web peer.
+    if integrated:
+        web_url = V.get("web_url", "http://localhost:3000")
+        for plat in ("android", "ios"):
+            if shots.get(plat, {}).get("ok"):
+                for ct in ("voice", "video"):
+                    r = verify.run_twoparty_mobile(plat, ct, web_url, str(demo),
+                                                   env_file=str(ENV_FILE), slug=uc["slug"])
+                    mobile_calls[f"{plat}-{ct}"] = bool(r.get("callConnected"))
+                    print(f"  call-matrix {plat}↔web {ct}: connected={r.get('callConnected')}")
+    print(f"  disk free: {mobile.disk_free_gb()}GB")
     res = {"useCase": uc["name"], "slug": uc["slug"], "screenshots": shots, "leftUp": True,
            "integrated": integrated, "mobileCallMatrix": mobile_calls,
            "webUrl": V.get("web_url", "http://localhost:3000")}
