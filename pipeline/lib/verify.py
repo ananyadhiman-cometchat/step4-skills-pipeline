@@ -88,13 +88,25 @@ def build_gate(kind: str, comp_dir: Path) -> dict:
 
 
 def _backend_build(d: Path) -> tuple[int, str]:
-    if (d / "docker-compose.yml").exists() or (d.parent / "docker-compose.yml").exists():
-        return _run(["docker", "compose", "build"], cwd=str(d.parent))
-    if (d / "package.json").exists():   return _run(["npm", "install"], cwd=str(d))
-    if (d / "go.mod").exists():         return _run(["go", "build", "./..."], cwd=str(d))
-    if (d / "pom.xml").exists():        return _run(["mvn", "-q", "package", "-DskipTests"], cwd=str(d))
-    if (d / "requirements.txt").exists(): return _run(["python3", "-m", "compileall", "."], cwd=str(d))
-    if (d / "composer.json").exists():  return _run(["php", "-l", "index.php"], cwd=str(d))
+    """LANGUAGE-NATIVE compile/syntax gate — the build stage checks the CODE, not that Docker builds
+    (Docker is the containerize stage's job). Language checks come FIRST; docker-compose is only a
+    last resort when no language toolchain is recognized (and it runs in the dir that HAS the compose
+    file, not blindly in the parent — the UC2/Laravel bug that shipped its own backend/docker-compose.yml)."""
+    if (d / "composer.json").exists():        # PHP / Laravel — lint all app PHP (syntax = PHP's compile check)
+        # NB: php -l prints "No syntax errors detected in X" on success — do NOT grep "syntax error"
+        # (it substring-matches the success line). Match only real failures.
+        cmd = ('out=$(find app routes database config public bootstrap -name "*.php" -print0 2>/dev/null '
+               '| xargs -0 -r -n1 php -l 2>&1 | grep -iE "Parse error|Fatal error|Errors parsing" || true); '
+               '[ -z "$out" ] && echo "php lint clean" || { echo "$out"; exit 1; }')
+        return _run(["bash", "-lc", cmd], cwd=str(d))
+    if (d / "go.mod").exists():               return _run(["go", "build", "./..."], cwd=str(d))
+    if (d / "pom.xml").exists():              return _run(["mvn", "-q", "-B", "compile", "-DskipTests"], cwd=str(d))
+    if (d / "requirements.txt").exists() or (d / "pyproject.toml").exists():
+        return _run(["python3", "-m", "compileall", "-q", "."], cwd=str(d))
+    if (d / "package.json").exists():         return _run(["npm", "install"], cwd=str(d))
+    for cd in (d, d.parent):                  # last resort: docker, in the dir that actually has the compose file
+        if (cd / "docker-compose.yml").exists() or (cd / "compose.yaml").exists():
+            return _run(["docker", "compose", "build"], cwd=str(cd))
     return 0, "backend: no recognized build file — configure"
 
 

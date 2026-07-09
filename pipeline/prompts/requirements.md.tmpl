@@ -11,12 +11,12 @@ Produce a single markdown spec with these sections (concise, concrete, no fluff)
 5. ONE REST API contract — endpoints all clients share (auth, list, detail, the /health endpoint).
    OBEY these CANONICAL conventions so backend signatures stay CONSISTENT across ALL use cases
    (do not reinvent per use case — only the resource nouns change):
-   - Base path `/api`. Health at `GET /api/health` → `{"status":"ok"}`.
-   - Auth: `POST /api/auth/login` body `{email,password}` → `{token, cometchat_auth_token, user:{uid,name,role,avatar_url}}`;
+   - Base path `/api`. Health at `GET /api/health` → `{{"status":"ok"}}`.
+   - Auth: `POST /api/auth/login` body `{{email,password}}` → `{{token, cometchat_auth_token, user:{{uid,name,role,avatar_url}}}}`;
      `POST /api/auth/signup` same response shape. Bearer JWT (`Authorization: Bearer <token>`), subject = user uid.
    - List endpoints are paginated + envelope-wrapped: `GET /api/<resource>?page&limit` →
-     `{"data":[...], "pagination":{"page","limit","total"}}`. Detail: `GET /api/<resource>/{id}` → the bare object.
-   - Errors: non-2xx → `{"detail":"<message>"}` (FastAPI-style), correct HTTP status (401 unauth, 403 forbidden, 404, 422 validation).
+     `{{"data":[...], "pagination":{{"page","limit","total"}}}}`. Detail: `GET /api/<resource>/{{id}}` → the bare object.
+   - Errors: non-2xx → `{{"detail":"<message>"}}` (FastAPI-style), correct HTTP status (401 unauth, 403 forbidden, 404, 422 validation).
    - Money/decimals serialize as JSON STRINGS; timestamps as ISO-8601 UTC. UIDs prefixed "{slug}-".
    Document the use-case-specific resources on top of this shared skeleton — same shapes, different nouns.
 6. Namespaced seed — ~4-6 users, UIDs prefixed "{slug}-", one per role. Seed/test emails MUST use a
