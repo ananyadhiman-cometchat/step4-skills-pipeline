@@ -49,6 +49,17 @@ was incomplete or missing:
    placeholder). (The pipeline-side half of this — the harness not injecting creds — is in
    pipeline-notes.)
 
+6. **F-web-ongoing — ongoing-call screen doesn't fill the viewport (Standard mode).** Same family
+   as #4 but for the *connected* call: after Accept, `<CometChatOngoingCall>` renders in a bounded
+   box (~top ⅔ of the page) instead of full-screen, so the **conversation thread bleeds through
+   below the call controls** (Missed Call / Outgoing Call / Call Answered chips visible under the
+   hang-up bar) and the remote participant tile/name label duplicates (a "Sara Seller" label appears
+   both top-right and bottom-left). *Skill ask:* the Standard-mode prebuilt call components need a
+   documented full-viewport container (`position:fixed; inset:0` / `100vw×100vh`) — the skill only
+   spells this out for the SDK-only `joinSession` path, so the ongoing screen inherits whatever
+   height its parent gives it. Ties into the same overlay fix as #4 but the ongoing surface needs
+   its own full-bleed sizing. Observed in the web↔web/mobile↔web call e2e.
+
 ## SDK packaging (CometChat product, not docs)
 - **RN UI Kit ships uncompiled `.tsx` with type errors.** `@cometchat/chat-uikit-react-native`
   (CometChatCallButtons / CallLogs / Incoming / OutgoingCall) has TS2769/TS2322 in its *own* source,

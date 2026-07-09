@@ -383,7 +383,7 @@ def stage_boot(S, uc):
 
 def stage_push_main(S, uc):
     repo = state.repo_dir(S, uc["slug"])
-    sh("gh", "repo", "create", uc["repo"], "--private")  # idempotent: no-op if exists
+    sh("gh", "repo", "create", uc["repo"], "--public")  # idempotent: no-op if exists (use cases are public)
     _, login = sh("gh", "api", "user", "-q", ".login"); owner = login.strip()
     git(repo, "remote", "remove", "origin"); git(repo, "remote", "add", "origin",
         f"https://github.com/{owner}/{uc['repo']}.git")
