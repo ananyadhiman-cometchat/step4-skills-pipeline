@@ -1,0 +1,75 @@
+{
+  "_comment": "Runtime config for the hybrid worker. Paths are ~-expanded. The claude_args seams are the ONE place the exact headless invocation lives (matches the other pipeline's lib/claude_runner.py caveat).",
+  "claude_bin": "claude",
+  "work_root": "~/Desktop/automate/runs",
+  "reports_dir": "_reports",
+  "state_dir": "~/Desktop/automate/pipeline-state",
+  "gaps_dir": "~/Desktop/automate/pipeline-state/gaps",
+  "master_gaps": "~/Desktop/automate/MASTER_GAPS.md",
+  "skills_dir": "~/Desktop/automate/cometchat-skills/skills",
+  "mcp_config": "~/Desktop/automate/.mcp.json",
+  "models": {
+    "spec": "claude-sonnet-4-6",
+    "provision": "claude-opus-4-8",
+    "build": "claude-sonnet-4-6",
+    "integrate": "claude-sonnet-4-6",
+    "judge": "claude-opus-4-8"
+  },
+  "max_turns": {
+    "spec": 20,
+    "provision": 40,
+    "build": 100,
+    "integrate": 120,
+    "judge": 12
+  },
+  "max_retries": 5,
+  "bootstrap": {
+    "_comment": "Phase-0 idempotent tool installs. preflight runs these if the tool is missing, so the run is self-provisioning.",
+    "maestro_install": "curl -Ls https://get.maestro.mobile.dev | bash",
+    "playwright_install": "npx --yes playwright@latest install chromium",
+    "extra_path": [
+      "~/.maestro/bin",
+      "~/Library/Android/sdk/platform-tools",
+      "~/Library/Android/sdk/emulator"
+    ],
+    "watchman_install": "brew install watchman",
+    "jdk17_install": "brew install openjdk@17"
+  },
+  "permission_mode": "bypassPermissions",
+  "common_claude_args": [
+    "--output-format",
+    "json"
+  ],
+  "_phaseA_note": "Baseline build: NO skills, NO docs-mcp (deliberate \u2014 a clean baseline, and skills must not leak into Phase A).",
+  "phaseA_extra_args": [],
+  "_phaseB_note": "Integrate: adds the cometchat-skills + docs-mcp. VERIFY these flag names against your installed Claude Code version \u2014 this is the seam the other pipeline flagged. If your build loads skills from .claude/skills instead of a flag, set link_skills=true and leave phaseB_extra_args with just the mcp-config.",
+  "phaseB_extra_args": [
+    "--mcp-config",
+    "{mcp_config}"
+  ],
+  "link_skills_into_project": true,
+  "verify": {
+    "_comment": "Per-component verify. e2e commands are dispatched if set; if empty, verify records 'e2e: not-configured' (honest, not a fake pass).",
+    "backend_health_paths": [
+      "/api/health",
+      "/health",
+      "/healthz",
+      "/api/v1/health"
+    ],
+    "backend_health_timeout_s": 150,
+    "e2e": {
+      "web": "npx playwright test -g @smoke",
+      "android": "maestro test e2e/",
+      "ios": "maestro test e2e/",
+      "mobile": "maestro test e2e/",
+      "app": "maestro test e2e/"
+    },
+    "e2e_note": "Commands run in the repo/component dir. The build/integrate LLM authors the actual specs (e2e/*.spec.ts, e2e/*.flow.yaml). Empty = recorded not-configured. Install: npm i -D @playwright/test && npx playwright install; brew install maestro.",
+    "backend_url": "http://localhost:8080",
+    "web_url": "http://localhost:3000"
+  },
+  "checkpoints": {
+    "cp1_after": "boot",
+    "cp2_after": "verify"
+  }
+}

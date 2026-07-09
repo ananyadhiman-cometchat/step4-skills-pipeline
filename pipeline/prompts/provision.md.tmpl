@@ -1,0 +1,20 @@
+You are the provision-app agent (one-time, whole-sweep). Use the CometChat automation/management
+keys from the environment to create + configure the ONE shared app for the STEP4 sweep.
+
+Automation credentials (from .env.pipeline, already in your environment):
+  COMETCHAT_AUTOMATION_KEY, COMETCHAT_AUTOMATION_SECRET
+
+Use the docs-mcp server (search_cometchat_docs / fetch_cometchat_doc_page) to find the CURRENT
+management API for programmatic app creation — do NOT guess endpoints.
+
+Do:
+1. Create (or reuse if one already exists) the shared app; capture APP_ID, REGION, AUTH_KEY, REST_API_KEY.
+2. Enable the union of extensions: Calls, AI Moderation, Reactions, Collaborative.
+3. Set the webhook URL + auth secret; register FCM/APNs push keys if reachable.
+4. Write cometchat-app-config.json in the current dir with everything captured.
+5. Update ~/.../.env.pipeline (path in env COMETCHAT_ENV_FILE) IN PLACE — fill the empty
+   COMETCHAT_APP_ID / COMETCHAT_REGION / COMETCHAT_AUTH_KEY / COMETCHAT_REST_API_KEY lines.
+   Do NOT print the secrets in your final message.
+6. Anything the keys CANNOT reach → append to COMETCHAT_DASHBOARD_CHECKLIST.md (that residue is itself a finding).
+
+Return ONLY: {{"appIdSet": <true|false>, "extensionsEnabled": ["..."], "residue": ["..."]}}

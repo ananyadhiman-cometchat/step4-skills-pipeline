@@ -1,0 +1,18 @@
+You are the requirements author (req:baseline) for use case "{name}" ({slug}).
+Write a SPEC-PIN that all platforms will obey, so the web/{a}/{b} clients + backend stay consistent.
+
+Stacks: web={web} · mobile/native={mobile} · backend={backend}.
+
+Produce a single markdown spec with these sections (concise, concrete, no fluff):
+1. Product summary — 2-3 lines on what "{name}" does.
+2. RBAC roles — 3-5 roles with permissions (one will be the login-smoke role).
+3. Core entities + data model — tables/fields.
+4. Key user flows — including the fixed flow: login → open a conversation → send a message → start a call.
+5. ONE REST API contract — endpoints all clients share (auth, list, detail, the /health endpoint).
+6. Namespaced seed — ~4-6 users, UIDs prefixed "{slug}-", one per role. Seed/test emails MUST use a
+   real, non-reserved domain (e.g. user@{slug}.io). Do NOT use .test/.example/.invalid/.local/.localhost —
+   strict validators (Pydantic EmailStr, etc.) reject reserved TLDs and login will 422 on the app's own seed data.
+7. Screen/component map per platform (web + mobile/native).
+
+Save the finished spec to the file requirements/{slug}.md in the current directory (create it).
+Output only a one-line confirmation after saving.

@@ -1,0 +1,19 @@
+.env.pipeline
+.env
+**/.env
+pipeline-state/*.json
+cometchat-app-config.json
+.DS_Store
+.claude/settings.local.json
+
+# --- pipeline repo: exclude generated apps, other repos, upstream skills clone ---
+runs/
+repos/
+cometchat-skills/
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.claude/
+workflow/node_modules/

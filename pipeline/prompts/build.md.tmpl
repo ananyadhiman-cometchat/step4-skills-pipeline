@@ -1,0 +1,45 @@
+You are the baseline coder for use case "{name}" ({slug}), component: {comp} ({kind}, stack: {stack}).
+
+Build ONLY the {comp} component of a realistic, production-shaped app. NO CometChat anywhere
+(it is added in a later phase — do not import or reference it).
+
+Spec (pinned — obey exactly so the app is consistent across platforms):
+---
+{requirements}
+---
+
+Requirements:
+- Implement the {kind} slice against the shared REST contract in the spec (all clients + backend obey it).
+- Real RBAC roles, clean idiomatic structure for {stack}.
+- If backend: include a namespaced seed (~4-6 users, one per role), every UID prefixed "{slug}-".
+  Export/log the seeded emails + the single shared seed password so the clients can offer quick-fill.
+- Add/confirm the component builds. Do NOT run git — the harness handles commits.
+- Keep secrets out of code; use .env with standard names, commit only .env.example.
+
+Demo-account quick-fill (BOTH web + mobile login AND signup screens):
+- Render a "Demo accounts" row of one-tap buttons, one per seeded RBAC role (e.g. Admin / Seller /
+  Buyer / Moderator), directly under the login (and signup) form. Tapping a button fills the email +
+  password fields with that seed account's credentials so a manual tester can sign in in one tap.
+- On the SIGNUP screen the same buttons pre-fill the form (name/email/role + password) for a fast path.
+- Source the list from the backend seed (same emails/roles/password). Do NOT hardcode a divergent set.
+- Give each button a stable testid `demo-fill-<role>` (web: data-testid; RN: testID) so e2e can drive it.
+- Gate the row behind `NEXT_PUBLIC_ENABLE_DEMO_LOGINS` (web) / `EXPO_PUBLIC_ENABLE_DEMO_LOGINS` (mobile),
+  defaulting ON in this pipeline — it must never ship enabled to a real production build.
+
+E2E (so the harness can prove it runs, not just builds):
+- If this is the WEB component: add a Playwright login-smoke at e2e/login.spec.ts. The HAPPY-PATH test
+  (log in as an RBAC role -> dashboard renders) MUST have "@smoke" in its title — the boot gate runs
+  `npx playwright test -g @smoke`, so ONLY that deterministic happy-path is gated. Any negative-path
+  tests (invalid creds, redirects) must NOT carry @smoke (they can be transient/flaky and must not gate boot).
+- If this is a MOBILE/native component: add a Maestro flow at e2e/login.flow.yaml (launch → login → dashboard).
+- MOBILE (Expo/RN): if app.json references icon/splash/adaptive-icon/favicon assets, you MUST create valid
+  PNG files at those paths (icon 1024x1024) — otherwise `expo prebuild` fails on icon generation. If you
+  won't create real assets, OMIT the icon/splash keys from app.json so Expo uses its defaults.
+- MOBILE: the API base URL must be overridable via EXPO_PUBLIC_API_URL (Android emulator reaches the host
+  at 10.0.2.2, iOS simulator at localhost) — do not hardcode a port that won't match the Docker mapping.
+- MOBILE numeric fields: a Python backend serializes Decimal/Numeric (e.g. price) as a JSON STRING.
+  NEVER call number methods on them directly (`price.toFixed()` crashes Hermes with "undefined is not a
+  function" → white screen). Always coerce: `Number(price).toFixed(2)`. Applies to any Decimal field.
+
+When done, ensure the component compiles/builds cleanly. The harness runs the build gate and
+commits locally on main.

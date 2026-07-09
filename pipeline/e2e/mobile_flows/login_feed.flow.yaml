@@ -1,0 +1,21 @@
+# Log in and stay on the Marketplace feed to prove backend connectivity (listings load).
+appId: com.mkt.mobile
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    text: "Don't Show Again"
+    optional: true
+- assertVisible: "Sign in to your account"
+- tapOn:
+    id: "email-input"
+- inputText: "${EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${PASSWORD}"
+- tapOn: "Sign In"
+- assertVisible: "Marketplace"
+- extendedWaitUntil:
+    visible: "Vintage Camera"
+    timeout: 15000
+- takeScreenshot: /tmp/ios-feed

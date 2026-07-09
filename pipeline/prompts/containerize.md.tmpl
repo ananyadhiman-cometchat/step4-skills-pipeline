@@ -1,0 +1,26 @@
+You are the containerization step for the "{name}" ({slug}) baseline. The per-component apps exist
+but there is no Docker orchestration yet. Create it so `docker compose up -d` brings the whole
+baseline online for a boot smoke test. NO CometChat (baseline phase).
+
+The repo has:
+- backend/  ({backend}) — runs a web server exposing GET /health (see start.sh / app). Needs a DB.
+- web/      (Next.js) — the web client.
+- (mobile/ if present is NOT containerized — it runs on a simulator separately.)
+
+Create exactly these, at the paths shown:
+1. backend/Dockerfile — builds + runs the backend server; runs the seed then starts the server on
+   container port 8000. Read backend/start.sh and requirements to get it right.
+2. web/Dockerfile — installs deps and runs the Next.js DEV server on container port 3000 (dev is fine
+   for a smoke test — avoids a slow production build).
+3. docker-compose.yml AT THE REPO ROOT with three services:
+   - db: postgres:16-alpine, POSTGRES_USER/PASSWORD/DB set, a healthcheck (pg_isready).
+   - backend: build ./backend, depends_on db (service_healthy), env incl. DATABASE_URL pointing at the
+     db service, **host port 8080 -> container 8000**, and a healthcheck hitting the app's REAL health
+     route (inspect app/api routing — it is often mounted under a prefix like /api/health, NOT /health).
+   - web: build ./web, env with the API base URL pointing at the backend (http://localhost:8080 from the
+     host, or http://backend:8000 internally), **host port 3000 -> container 3000**, depends_on backend.
+   Use the standard COMETCHAT_*-free env var names already in the .env.example files.
+
+Host ports MUST be backend=8080 and web=3000 (the boot health checks target those exact ports).
+After writing the files, do NOT run docker or git — the harness boots and commits.
+Output a one-line confirmation listing the files you created.

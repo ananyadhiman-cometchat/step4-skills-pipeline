@@ -1,0 +1,13 @@
+# Wait for an incoming CometChat call, accept it, and screenshot the connected call.
+# Assumes the app is already logged in + foregrounded (run login_msgs first).
+appId: com.mkt.mobile
+---
+# Incoming-call widget (CometChatIncomingCall via CallSurfaces) must appear within ~30s
+- extendedWaitUntil:
+    visible: "Accept"
+    timeout: 45000
+- takeScreenshot: /tmp/mobile-incoming
+- tapOn: "Accept"
+- waitForAnimationToEnd:
+    timeout: 8000
+- takeScreenshot: /tmp/mobile-ongoing

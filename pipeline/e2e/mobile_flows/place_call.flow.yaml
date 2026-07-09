@@ -1,0 +1,10 @@
+# Mobile as CALLER: open the conversation with ${PEER} and start a call.
+# Assumes already logged in + on Messages tab (run login_msgs first).
+appId: com.mkt.mobile
+---
+- tapOn: "${PEER}"
+- assertVisible:
+    id: "cometchat-message-list"
+- tapOn:
+    id: "cometchat-call-button"
+- takeScreenshot: /tmp/mobile-outgoing

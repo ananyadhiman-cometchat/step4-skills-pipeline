@@ -1,0 +1,28 @@
+# Log in the mobile app as ${EMAIL}. CallSurfaces is mounted at APP ROOT, so the CometChat
+# incoming-call listener arms on login regardless of which tab is active — the Messages
+# navigation below is best-effort (iOS tab labels aren't always exposed to the a11y tree).
+# Params: -e EMAIL=... -e PASSWORD=...
+appId: com.mkt.mobile
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    text: "Don't Show Again"
+    optional: true
+- tapOn:
+    text: "OK"
+    optional: true
+- assertVisible: "Sign in to your account"
+- tapOn:
+    id: "email-input"
+- inputText: "${EMAIL}"
+- tapOn:
+    id: "password-input"
+- inputText: "${PASSWORD}"
+- tapOn: "Sign In"
+# Logged-in confirmation (listener now armed at root)
+- assertVisible: "Marketplace"
+# Best-effort: move to Messages so the call arrives over an open thread (non-fatal on iOS)
+- tapOn:
+    text: "Messages"
+    optional: true
