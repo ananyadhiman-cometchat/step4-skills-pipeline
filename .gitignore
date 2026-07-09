@@ -17,3 +17,6 @@ __pycache__/
 *.pyc
 .claude/
 workflow/node_modules/
+
+# Visual-baseline goldens (established per-machine on first run; not canonical test artifacts)
+pipeline-state/baselines/
