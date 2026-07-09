@@ -1,28 +1,33 @@
-# Log in the mobile app as ${EMAIL}. CallSurfaces is mounted at APP ROOT, so the CometChat
-# incoming-call listener arms on login regardless of which tab is active — the Messages
-# navigation below is best-effort (iOS tab labels aren't always exposed to the a11y tree).
-# Params: -e EMAIL=... -e PASSWORD=...
-appId: com.mkt.mobile
+# Generic mobile login for the call matrix. CallSurfaces mounts the CometChat incoming-call
+# listener at APP ROOT, so it arms on login regardless of tab. Robust across use cases: uses the
+# mandated login testIDs (email-input / password-input / login-submit) rather than app-specific text.
+# Params: -e APP_ID=<pkg/bundle> -e EMAIL=... -e PASSWORD=... -e SUBMIT="Sign In" -e HOME="Messages"
+appId: ${APP_ID}
 ---
 - launchApp:
     clearState: true
-- tapOn:
-    text: "Don't Show Again"
-    optional: true
-- tapOn:
-    text: "OK"
-    optional: true
-- assertVisible: "Sign in to your account"
-- tapOn:
-    id: "email-input"
+# Dismiss the Android 15 "16 KB compatibility" dialog if present (no-op elsewhere)
+- tapOn: { text: "Don't Show Again", optional: true }
+- tapOn: { text: "OK", optional: true }
+# Wait for the login form (testID is stable across stacks; screen text is not)
+- extendedWaitUntil:
+    visible: { id: "email-input" }
+    timeout: 30000
+- tapOn: { id: "email-input" }
 - inputText: "${EMAIL}"
-- tapOn:
-    id: "password-input"
+- tapOn: { id: "password-input" }
 - inputText: "${PASSWORD}"
-- tapOn: "Sign In"
-# Logged-in confirmation (listener now armed at root)
-- assertVisible: "Marketplace"
-# Best-effort: move to Messages so the call arrives over an open thread (non-fatal on iOS)
+# Prefer the mandated submit testID; fall back to the button label
+- runFlow:
+    when: { visible: { id: "login-submit" } }
+    commands:
+      - tapOn: { id: "login-submit" }
 - tapOn:
-    text: "Messages"
+    text: "${SUBMIT}"
     optional: true
+# Logged-in = the login form is gone (listener now armed at root)
+- extendedWaitUntil:
+    notVisible: { id: "email-input" }
+    timeout: 20000
+# Best-effort: move to the messages tab so a call arrives over an open thread (non-fatal on iOS)
+- tapOn: { text: "${HOME}", optional: true }

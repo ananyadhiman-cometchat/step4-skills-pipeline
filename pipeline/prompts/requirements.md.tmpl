@@ -22,7 +22,12 @@ Produce a single markdown spec with these sections (concise, concrete, no fluff)
 6. Namespaced seed — ~4-6 users, UIDs prefixed "{slug}-", one per role. Seed/test emails MUST use a
    real, non-reserved domain (e.g. user@{slug}.io). Do NOT use .test/.example/.invalid/.local/.localhost —
    strict validators (Pydantic EmailStr, etc.) reject reserved TLDs and login will 422 on the app's own seed data.
-7. Screen/component map per platform (web + mobile/native).
+   The seed MUST ALSO include two FIXED automated-call-test users (the harness logs in as these across
+   ALL use cases): email `chat-a@{slug}.io` uid `{slug}-cha-001`, and `chat-b@{slug}.io` uid `{slug}-chb-001`,
+   both ordinary users, password = the shared seed password. They must be able to open a 1:1 conversation.
+7. Screen/component map per platform (web + mobile/native). Every client's LOGIN screen MUST expose the
+   stable testIDs `email-input`, `password-input`, `login-submit` (web: data-testid; RN: testID; Flutter:
+   Key/Semantics; native: accessibility id) so the automated login flow is stack-independent.
 
 Save the finished spec to the file requirements/{slug}.md in the current directory (create it).
 Output only a one-line confirmation after saving.

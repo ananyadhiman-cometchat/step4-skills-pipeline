@@ -99,24 +99,31 @@ def _verdict(out: str) -> dict:
     return {"error": "no verdict json", "tail": (out or "")[-300:]}
 
 
-def web_calls_mobile(platform, call_type, web_url, shot_dir, env_file="", slug="") -> dict:
+def web_calls_mobile(platform, call_type, web_url, shot_dir, env_file="", slug="",
+                     app_id=None, mobile_email=None, web_email=None, password=None,
+                     submit="Sign In", home="Messages") -> dict:
+    app_id = app_id or "com.mkt.mobile"                 # per-UC package/bundle (resolved by the caller)
+    mobile_email = mobile_email or MOBILE_EMAIL         # the two call-test accounts of THIS use case
+    web_email = web_email or WEB_EMAIL
+    password = password or WEB_PW
     tag = f"{platform}-{call_type}"
     reset_app(platform)   # clean slate — no lingering call from a prior leg
-    # 1. mobile logs in (Sara) → Messages tab → CallSurfaces arms the incoming listener
-    login = maestro(platform, "login_msgs.flow.yaml", {"EMAIL": MOBILE_EMAIL, "PASSWORD": WEB_PW})
+    # 1. mobile logs in → CallSurfaces arms the incoming listener at app root
+    login = maestro(platform, "login_msgs.flow.yaml",
+                    {"APP_ID": app_id, "EMAIL": mobile_email, "PASSWORD": password, "SUBMIT": submit, "HOME": home})
     if not login["ok"]:
         return {"leg": tag, "direction": "web-calls-mobile", "mobileLogin": login, "callConnected": False}
     # Let CometChat finish connecting before the call is placed — iOS's SDK connect is markedly
     # slower than Android's, and a call placed before the callee is online rings into the void.
     time.sleep(15 if platform == "ios" else 5)
-    # 2. spawn web caller (Bob rings Sara, holds the line)
+    # 2. spawn web caller (the web party rings the mobile party, holds the line)
     since = int(time.time())   # server-answered floor
     p, dst = web_proc("webcaller.web.mjs", {
-        "WEB_URL": web_url, "CALL_TYPE": call_type, "CALLER_EMAIL": WEB_EMAIL,
-        "E2E_PASSWORD": WEB_PW, "HOLD_MS": "55000", "SHOT_DIR": shot_dir, "TAG": tag})
+        "WEB_URL": web_url, "CALL_TYPE": call_type, "CALLER_EMAIL": web_email,
+        "E2E_PASSWORD": password, "HOLD_MS": "55000", "SHOT_DIR": shot_dir, "TAG": tag})
     time.sleep(2)
     # 3. mobile waits for the incoming widget, accepts, screenshots
-    accept = maestro(platform, "accept_call.flow.yaml", {}, timeout=90)
+    accept = maestro(platform, "accept_call.flow.yaml", {"APP_ID": app_id}, timeout=90)
     mob_inc = pull_shot(platform, "/tmp/mobile-incoming", f"{shot_dir}/mobile-incoming-{tag}.png")
     mob_ong = pull_shot(platform, "/tmp/mobile-ongoing", f"{shot_dir}/mobile-ongoing-{tag}.png")
     # 4. collect web verdict + SERVER-side answered (deterministic, media-independent)
@@ -146,10 +153,18 @@ def main():
     ap.add_argument("--shot-dir", default="/tmp")
     ap.add_argument("--env-file", default="")
     ap.add_argument("--slug", default="mkt")
+    ap.add_argument("--app-id", default=None)         # mobile package/bundle id (per UC)
+    ap.add_argument("--mobile-email", default=None)   # the two call-test accounts of this UC
+    ap.add_argument("--web-email", default=None)
+    ap.add_argument("--password", default=None)
+    ap.add_argument("--submit", default="Sign In")
+    ap.add_argument("--home", default="Messages")
     args = ap.parse_args()
     if args.direction == "web-calls-mobile":
         res = web_calls_mobile(args.platform, args.call_type, args.web_url, args.shot_dir,
-                               env_file=args.env_file, slug=args.slug)
+                               env_file=args.env_file, slug=args.slug, app_id=args.app_id,
+                               mobile_email=args.mobile_email, web_email=args.web_email,
+                               password=args.password, submit=args.submit, home=args.home)
     else:
         res = {"error": "mobile-calls-web not yet wired"}
     print(json.dumps(res))

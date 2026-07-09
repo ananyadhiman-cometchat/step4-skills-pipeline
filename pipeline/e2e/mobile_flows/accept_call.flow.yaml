@@ -1,13 +1,11 @@
-# Wait for an incoming CometChat call, accept it, and screenshot the connected call.
-# Assumes the app is already logged in + foregrounded (run login_msgs first).
-appId: com.mkt.mobile
+# Wait for an incoming CometChat call, accept it, screenshot. Generic across use cases — the
+# CometChat kit's Accept/Decline widget is stack-independent. Param: -e APP_ID=...
+appId: ${APP_ID}
 ---
-# Incoming-call widget (CometChatIncomingCall via CallSurfaces) must appear within ~30s
 - extendedWaitUntil:
     visible: "Accept"
     timeout: 45000
 - takeScreenshot: /tmp/mobile-incoming
 - tapOn: "Accept"
-- waitForAnimationToEnd:
-    timeout: 8000
+- waitForAnimationToEnd: { timeout: 8000 }
 - takeScreenshot: /tmp/mobile-ongoing

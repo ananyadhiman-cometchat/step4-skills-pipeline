@@ -211,19 +211,27 @@ def run_twoparty_web(repo_dir: Path, web_url: str, shot_dir: str,
 
 
 def run_twoparty_mobile(platform: str, call_type: str, web_url: str, shot_dir: str,
-                        env_file: str = "", slug: str = "mkt", retries: int = 2) -> dict:
+                        env_file: str = "", slug: str = "mkt", retries: int = 2,
+                        app_id: str | None = None, mobile_email: str | None = None,
+                        web_email: str | None = None, password: str | None = None) -> dict:
     """Automated mobile↔web call leg (android↔web / ios↔web). Maestro drives the native app, the web
     peer rings it; the leg passes on the SIGNALING verdict — the mobile incoming widget appeared +
     Maestro accepted + CometChat logged the call ANSWERED (server-side, media-independent). Retries
-    up to `retries` (retry-until-pass). Requires the emulator/sim booted + integrated app installed."""
+    up to `retries` (retry-until-pass). Parameterized per use case (app_id + the two call-test
+    accounts) so it is not mkt-specific. Requires the emulator/sim booted + integrated app installed."""
     script = Path(__file__).resolve().parent.parent / "e2e" / "twoparty_mobile.py"
     if not script.exists():
         return {"error": "no twoparty_mobile.py", "callConnected": False}
+    extra = []
+    if app_id:       extra += ["--app-id", app_id]
+    if mobile_email: extra += ["--mobile-email", mobile_email]
+    if web_email:    extra += ["--web-email", web_email]
+    if password:     extra += ["--password", password]
     last = {"error": "no run", "callConnected": False}
     for a in range(retries):
         code, out = _run(["python3", str(script), "--platform", platform, "--direction", "web-calls-mobile",
                           "--call-type", call_type, "--web-url", web_url, "--shot-dir", shot_dir,
-                          "--env-file", env_file, "--slug", slug], timeout=300)
+                          "--env-file", env_file, "--slug", slug, *extra], timeout=300)
         v = None
         for line in reversed((out or "").splitlines()):
             if line.strip().startswith("{"):

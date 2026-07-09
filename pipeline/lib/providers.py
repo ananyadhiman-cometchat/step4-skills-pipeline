@@ -144,6 +144,24 @@ _REGISTRY = {"rn": RNProvider, "flutter": FlutterProvider,
              "android-native": AndroidNativeProvider, "ios-native": IOSNativeProvider}
 
 
+def resolve_app_id(kind: str, app_dir) -> str | None:
+    """Read the mobile app's package/bundle id from the built app (for Maestro's appId), per stack."""
+    app_dir = Path(app_dir)
+    for g in (app_dir / "android/app/build.gradle", app_dir / "android/app/build.gradle.kts",
+              app_dir / "app/build.gradle", app_dir / "build.gradle"):
+        if g.exists():
+            for line in g.read_text().splitlines():
+                if "applicationId" in line and ('"' in line or "'" in line):
+                    q = '"' if '"' in line else "'"
+                    return line.split(q)[1]
+    aj = app_dir / "app.json"                          # RN / Expo
+    if aj.exists():
+        import json
+        d = json.loads(aj.read_text()).get("expo", {})
+        return (d.get("android", {}).get("package") or d.get("ios", {}).get("bundleIdentifier"))
+    return None
+
+
 def mobile_provider(kind: str, stack: str):
     """Return the provider instance for a non-web client component, or None if it's not a client
     the demo stage builds on a device (web/backend are handled separately)."""

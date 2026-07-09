@@ -112,13 +112,35 @@ def call_answered(env_file, slug, since_ts, poll_s: int = 12) -> dict:
         time.sleep(2)
 
 
+# Per-use-case call-test accounts (email, uid, display-name) for the two-party matrix. Generic
+# default derives from the slug; mkt keeps its original buyer/seller pair for back-compat. The
+# BACKEND seed of each use case MUST include these two accounts (mandated in the requirements/build
+# prompt) so a client can log in as them and their CometChat uids line up with the seeded conversation.
+CALL_TEST_OVERRIDE = {
+    "mkt": {"mobile": ("sara.seller@mkt.io", "mkt-sel-001", "Sara Seller"),
+            "web":    ("bob.buyer@mkt.io",   "mkt-buy-001", "Bob Buyer")},
+}
+
+
+def call_test_accounts(slug: str) -> dict:
+    """Return {'mobile': (email, uid, name), 'web': (email, uid, name)} for the call matrix."""
+    if slug in CALL_TEST_OVERRIDE:
+        return CALL_TEST_OVERRIDE[slug]
+    return {"mobile": (f"chat-a@{slug}.io", f"{slug}-cha-001", "Chat A"),
+            "web":    (f"chat-b@{slug}.io", f"{slug}-chb-001", "Chat B")}
+
+
 def seed_conversation(env_file, slug) -> dict:
-    """Seed two namespaced users + a message between them → a real conversation to test."""
+    """Seed the two call-test users + a message between them → a real conversation to test. Uses the
+    per-UC call_test_accounts so this works for ANY use case, not just the mkt buyer/seller pair."""
     cfg = _cfg(env_file)
-    buyer, seller = f"{slug}-buy-001", f"{slug}-sel-001"
-    r = {"buyer": create_user(cfg, buyer, "Bob Buyer", [f"uc:{slug}", "role:buyer"]),
-         "seller": create_user(cfg, seller, "Sara Seller", [f"uc:{slug}", "role:seller"]),
-         "seedMessage": send_message(cfg, seller, buyer, "Hi! Is the vintage camera still available?")}
-    r["ok"] = r["buyer"] in (200, 201) and r["seller"] in (200, 201) and r["seedMessage"] in (200, 201)
-    r["buyerUid"], r["sellerUid"] = buyer, seller
+    acc = call_test_accounts(slug)
+    (m_email, m_uid, m_name) = acc["mobile"]
+    (w_email, w_uid, w_name) = acc["web"]
+    r = {"mobile": create_user(cfg, m_uid, m_name, [f"uc:{slug}", "role:calltest"]),
+         "web": create_user(cfg, w_uid, w_name, [f"uc:{slug}", "role:calltest"]),
+         "seedMessage": send_message(cfg, w_uid, m_uid, "Hi! (automated call-test seed)")}
+    r["ok"] = r["mobile"] in (200, 201) and r["web"] in (200, 201) and r["seedMessage"] in (200, 201)
+    r["mobileUid"], r["webUid"] = m_uid, w_uid
+    r["buyerUid"], r["sellerUid"] = w_uid, m_uid   # legacy aliases
     return r

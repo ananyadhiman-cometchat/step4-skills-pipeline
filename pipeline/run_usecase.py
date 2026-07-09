@@ -287,7 +287,7 @@ def stage_demo(S, uc):
     # 2. mobile / native clients — dispatch to the STACK PROVIDER per component (RN / Flutter /
     #    native Android / native iOS). Each provider self-heals (cleartext + creds), builds, installs,
     #    launches and screenshots — the demo stage is no longer RN-only.
-    mobile_calls = {}
+    mobile_calls = {}; plat_app_id = {}
     api_a = V.get("api_android", "http://10.0.2.2:8080/api")   # android emulator → host
     api_i = V.get("api_ios", "http://localhost:8080/api")      # ios simulator → localhost
     for c in prompts.expand_components(uc):
@@ -301,16 +301,25 @@ def stage_demo(S, uc):
         ctx = {"app_dir": repo / c["dir"], "repo_dir": repo, "demo_dir": demo,
                "kind": c["kind"], "stack": c["stack"], "api_android": api_a, "api_ios": api_i,
                "api_web": "/api", "integrated": integrated, "env_file": str(ENV_FILE), "settings": S}
+        aid = providers.resolve_app_id(c["kind"], repo / c["dir"])
         for plat, shot in prov.demo(ctx).items():   # android / ios / web
             shots[plat] = shot
+            if plat in ("android", "ios") and aid:
+                plat_app_id[plat] = aid             # per-UC package/bundle for the Maestro flows
     # AUTOMATED mobile↔web call matrix (boot-2) — android/ios clients that built OK ring the web peer.
+    # Parameterized per use case: the app id + the two call-test accounts (not mkt-hardcoded).
     if integrated:
         web_url = V.get("web_url", "http://localhost:3000")
+        acc = cometchat.call_test_accounts(uc["slug"])
+        m_email, w_email = acc["mobile"][0], acc["web"][0]
+        pw = uc.get("e2ePassword", "Mkt@seed2026!")
         for plat in ("android", "ios"):
             if shots.get(plat, {}).get("ok"):
                 for ct in ("voice", "video"):
                     r = verify.run_twoparty_mobile(plat, ct, web_url, str(demo),
-                                                   env_file=str(ENV_FILE), slug=uc["slug"])
+                                                   env_file=str(ENV_FILE), slug=uc["slug"],
+                                                   app_id=plat_app_id.get(plat), mobile_email=m_email,
+                                                   web_email=w_email, password=pw)
                     mobile_calls[f"{plat}-{ct}"] = bool(r.get("callConnected"))
                     print(f"  call-matrix {plat}↔web {ct}: connected={r.get('callConnected')}")
     print(f"  disk free: {mobile.disk_free_gb()}GB")
@@ -438,8 +447,10 @@ def stage_verify(S, uc):
     dockerUp, boot_tail = (verify.compose_up(repo) if (repo / "docker-compose.yml").exists() else (False, "no compose"))
     healthy, _ = verify.health_check(V.get("backend_url", "http://localhost:8080"), hpaths,
                                      V["backend_health_timeout_s"]) if dockerUp else (False, None)
-    # STEP 3 — real chat/call e2e in the browser (login → open chat → send → call); bounded retry
-    email = uc.get("e2eEmail", "bob.buyer@mkt.io"); password = uc.get("e2ePassword", "Mkt@seed2026!")
+    # STEP 3 — real chat/call e2e in the browser (login → open chat → send → call); bounded retry.
+    # Accounts are the per-UC call-test pair (not mkt-hardcoded) — the web party logs into the browser.
+    _acc = cometchat.call_test_accounts(uc["slug"])
+    email = _acc["web"][0]; password = uc.get("e2ePassword", "Mkt@seed2026!")
     shot = str(repo / "_demo" / "web-call.png"); (repo / "_demo").mkdir(exist_ok=True)
     retry, e2e = 0, {}
     while retry <= S["max_retries"]:
@@ -452,7 +463,7 @@ def stage_verify(S, uc):
     # STEP 4 — TWO-PARTY call matrix (web↔web voice+video: caller rings, callee accepts, both connect).
     # The android↔web / ios↔web legs are exercised hands-on in the manual demo (CP2) — two-party
     # mobile↔web call automation isn't proven, so we record those legs as manual rather than fake them.
-    caller_email = uc.get("e2eCallerEmail", "bob.buyer@mkt.io"); callee_email = uc.get("e2eCalleeEmail", "sara.seller@mkt.io")
+    caller_email, callee_email = _acc["web"][0], _acc["mobile"][0]   # per-UC call-test pair
     matrix = verify.run_twoparty_web(repo, V.get("web_url", "http://localhost:3000"),
                                      str(repo / "_demo"), caller_email, callee_email, password,
                                      env_file=str(ENV_FILE), slug=uc["slug"]) if healthy else {"ok": False, "error": "not healthy"}
