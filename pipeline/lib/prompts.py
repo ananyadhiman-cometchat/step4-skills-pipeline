@@ -58,8 +58,14 @@ def render_provision(settings, uc: dict | None = None) -> str:
 
 
 def render_containerize(settings, uc: dict) -> str:
+    comps = expand_components(uc)
+    web_stack = uc.get("web") or (f"{uc.get('app')} (web target)" if uc.get("app") else "none")
+    web_dir = "web" if any(c["kind"] == "web" for c in comps) else \
+              ("app" if any(c["kind"] == "app" for c in comps) else "none")
+    layout = ", ".join(f"{c['dir']}/ ({c['stack']}, {c['kind']})" for c in comps)
     return _tmpl("containerize.md.tmpl").format(
-        name=uc["name"], slug=uc["slug"], backend=uc["backend"])
+        name=uc["name"], slug=uc["slug"], backend=uc["backend"],
+        web=web_stack, web_dir=web_dir, layout=layout)
 
 
 def render_build(settings, uc: dict, comp: dict) -> str:

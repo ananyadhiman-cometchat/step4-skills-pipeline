@@ -2,23 +2,36 @@ You are the containerization step for the "{name}" ({slug}) baseline. The per-co
 but there is no Docker orchestration yet. Create it so `docker compose up -d` brings the whole
 baseline online for a boot smoke test. NO CometChat (baseline phase).
 
-The repo has:
-- backend/  ({backend}) — runs a web server exposing GET /health (see start.sh / app). Needs a DB.
-- web/      (Next.js) — the web client.
-- (mobile/ if present is NOT containerized — it runs on a simulator separately.)
+Component layout (this use case): {layout}
+Backend stack: {backend} · Web client stack: {web} · Web source dir: `{web_dir}/`
 
-Create exactly these, at the paths shown:
-1. backend/Dockerfile — builds + runs the backend server; runs the seed then starts the server on
-   container port 8000. Read backend/start.sh and requirements to get it right.
-2. web/Dockerfile — installs deps and runs the Next.js DEV server on container port 3000 (dev is fine
-   for a smoke test — avoids a slow production build).
-3. docker-compose.yml AT THE REPO ROOT with three services:
-   - db: postgres:16-alpine, POSTGRES_USER/PASSWORD/DB set, a healthcheck (pg_isready).
-   - backend: build ./backend, depends_on db (service_healthy), env incl. DATABASE_URL pointing at the
-     db service, **host port 8080 -> container 8000**, and a healthcheck hitting the app's REAL health
-     route (inspect app/api routing — it is often mounted under a prefix like /api/health, NOT /health).
-   - web: build ./web, env with the API base URL pointing at the backend (http://localhost:8080 from the
-     host, or http://backend:8000 internally), **host port 3000 -> container 3000**, depends_on backend.
+STACK-GENERAL rules — pick the right base image + run command for the ACTUAL stack above; do NOT
+assume Node or Python:
+
+1. **backend/Dockerfile** — build + run the backend on container port **8000**; run any seed/migrate
+   first. Use the language's normal server:
+   - Python (FastAPI/Django) → `uvicorn`/`gunicorn`; PHP (Laravel/Slim) → `php-fpm` + nginx OR
+     `php artisan serve --host 0.0.0.0 --port 8000` for a smoke test; Node (Express/Nest) → `node`/
+     `npm start`; Java (Spring) → JRE base + the built `*.jar`; Go → multi-stage build → small binary.
+   - Read the backend's own start script / manifest (start.sh, composer.json, package.json, pom.xml,
+     go.mod, requirements.txt) to get the entrypoint right. Expose the app's REAL health route (often
+     under a prefix like `/api/health`, not `/health`).
+
+2. **web client on container port 3000** — serve the `{web}` client:
+   - Node SPA/SSR (Next.js/React/Angular/Vue/Astro) → build (or dev-serve for a smoke test) and serve
+     on 3000. `web/Dockerfile`.
+   - **Flutter web** (when the web client is Flutter and there is NO `web/` dir) → multi-stage: a
+     Flutter build stage runs `flutter build web` inside `app/`, then an `nginx:alpine` stage serves
+     `app/build/web` on port 3000. Put this Dockerfile at `{web_dir}/Dockerfile`.
+   - Native mobile dirs (android/, ios/, mobile/, or the Flutter `app/` MOBILE targets) are NOT
+     containerized — they build on a device/emulator separately.
+
+3. **docker-compose.yml AT THE REPO ROOT** with services:
+   - db: postgres:16-alpine (or the backend's DB), user/password/db set, healthcheck (pg_isready).
+   - backend: build ./backend, depends_on db (service_healthy), DATABASE_URL → the db service,
+     **host port 8080 → container 8000**, healthcheck hitting the REAL health route.
+   - web: build ./{web_dir}, API base URL → backend (http://localhost:8080 from host / http://backend:8000
+     internal), **host port 3000 → container 3000**, depends_on backend.
    Use the standard COMETCHAT_*-free env var names already in the .env.example files.
 
 Host ports MUST be backend=8080 and web=3000 (the boot health checks target those exact ports).
