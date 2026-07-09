@@ -144,6 +144,19 @@ _REGISTRY = {"rn": RNProvider, "flutter": FlutterProvider,
              "android-native": AndroidNativeProvider, "ios-native": IOSNativeProvider}
 
 
+def host_build_flutter_web(app_dir, api_url: str = "http://localhost:8080") -> dict:
+    """Build Flutter web on the HOST (the validated Flutter version) so the web Dockerfile can serve
+    the static `build/web` via nginx — no Flutter-version drift between validation and the container.
+    Call before compose_up for any Flutter use case. Idempotent (ensures the web platform first)."""
+    app_dir = Path(app_dir)
+    if not (app_dir / "pubspec.yaml").exists():
+        return {"ok": False, "note": "not a flutter app"}
+    _sh("flutter create . --platforms=web", cwd=str(app_dir), timeout=300)
+    code, out = _sh(f"flutter build web --release --dart-define=API_URL={api_url}", cwd=str(app_dir), timeout=900)
+    return {"ok": code == 0 and (app_dir / "build/web/index.html").exists(),
+            "exitCode": code, "tail": mobile._tail(out)}
+
+
 def resolve_app_id(kind: str, app_dir) -> str | None:
     """Read the mobile app's package/bundle id from the built app (for Maestro's appId), per stack."""
     app_dir = Path(app_dir)

@@ -6,7 +6,30 @@ Component layout (this use case): {layout}
 Backend stack: {backend} · Web client stack: {web} · Web source dir: `{web_dir}/`
 
 STACK-GENERAL rules — pick the right base image + run command for the ACTUAL stack above; do NOT
-assume Node or Python:
+assume Node or Python. THREE hard rules that prevent the common containerize failures:
+
+**A. MATCH the base image to the LOCAL toolchain version.** The code + lock files were generated and
+   validated with the host's toolchain; a Docker base image on an OLDER version breaks with "requires
+   php >=X / version solving failed / language feature disabled / No named parameter". Detect the local
+   version and pin it: run `php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;'` → `php:<that>-fpm-*`;
+   `node --version` → `node:<major>-*`; `go version`, `java -version` similarly. Do NOT use `:stable`,
+   `:latest`, or a guessed major for a lock-pinned project.
+
+**B. USE THE BACKEND'S ACTUAL DATABASE — do not default to postgres.** Read the backend config
+   (Laravel `config/database.php` + `.env.example` `DB_CONNECTION`, or the framework equivalent):
+   - **sqlite** (common default) → NO db service, NO db container. The backend just needs the built-in
+     `pdo_sqlite`; ensure the sqlite file dir is writable and migrations/seed run at container start.
+   - **mysql** → a `mysql:8`/`mariadb` service + `pdo_mysql`. **postgres** → `postgres:16-alpine` + `pdo_pgsql`.
+   Install ONLY the PHP extension the chosen DB needs (installing `pdo_mysql` for a sqlite app is wrong
+   and its build can fail). Add any ext build deps before `docker-php-ext-install`.
+
+**C. FLUTTER WEB → build on the HOST, serve static in Docker.** Do NOT run `flutter build web` inside
+   Docker (the cirruslabs image version drifts from the host that validated the app → compile errors).
+   The pipeline builds `flutter build web` on the host into `{web_dir}/build/web` BEFORE compose up; the
+   web Dockerfile is just `FROM nginx:alpine` + `COPY build/web /usr/share/nginx/html` + an SPA fallback
+   (`try_files $uri $uri/ /index.html`) on port 3000.
+
+Then, per component:
 
 1. **backend/Dockerfile** — build + run the backend on container port **8000**; run any seed/migrate
    first. Use the language's normal server:
@@ -20,9 +43,9 @@ assume Node or Python:
 2. **web client on container port 3000** — serve the `{web}` client:
    - Node SPA/SSR (Next.js/React/Angular/Vue/Astro) → build (or dev-serve for a smoke test) and serve
      on 3000. `web/Dockerfile`.
-   - **Flutter web** (when the web client is Flutter and there is NO `web/` dir) → multi-stage: a
-     Flutter build stage runs `flutter build web` inside `app/`, then an `nginx:alpine` stage serves
-     `app/build/web` on port 3000. Put this Dockerfile at `{web_dir}/Dockerfile`.
+   - **Flutter web** (web client is Flutter, no `web/` dir) → per rule C: `{web_dir}/Dockerfile` is
+     `FROM nginx:alpine` + `COPY build/web /usr/share/nginx/html` (the pipeline host-builds `build/web`
+     first). Do NOT run `flutter build web` inside Docker.
    - Native mobile dirs (android/, ios/, mobile/, or the Flutter `app/` MOBILE targets) are NOT
      containerized — they build on a device/emulator separately.
 

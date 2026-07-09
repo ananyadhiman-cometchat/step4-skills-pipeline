@@ -373,6 +373,10 @@ def stage_boot(S, uc):
         die_gate(f"boot needs GATE.baseline:{uc['slug']}")
     repo = state.repo_dir(S, uc["slug"]); V = S["verify"]
     hpaths = V.get("backend_health_paths") or [V.get("backend_health_path", "/health")]
+    # Flutter web is served static from build/web — build it on the HOST first (no Docker version drift).
+    if (repo / "app" / "pubspec.yaml").exists():
+        wb = providers.host_build_flutter_web(repo / "app")
+        print(f"  host flutter web build: ok={wb.get('ok')}")
     dockerUp, tail = (verify.compose_up(repo) if (repo / "docker-compose.yml").exists() else (False, "no compose"))
     backend_ok, hp = verify.health_check(V.get("backend_url", "http://localhost:8080"), hpaths,
                                          V["backend_health_timeout_s"]) if dockerUp else (False, None)
