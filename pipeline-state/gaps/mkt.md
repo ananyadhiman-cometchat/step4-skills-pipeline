@@ -58,7 +58,15 @@ was incomplete or missing:
    documented full-viewport container (`position:fixed; inset:0` / `100vw×100vh`) — the skill only
    spells this out for the SDK-only `joinSession` path, so the ongoing screen inherits whatever
    height its parent gives it. Ties into the same overlay fix as #4 but the ongoing surface needs
-   its own full-bleed sizing. Observed in the web↔web/mobile↔web call e2e.
+   its own full-bleed sizing. Observed in the web↔web/mobile↔web call e2e. **WEB-ONLY** — mobile
+   already renders the ongoing call in `absoluteFill` (full-screen via CallSurfaces).
+   **PARTIAL FIX (verified 2026-07-09):** `.cometchat-ongoing-call { position:fixed; inset:0;
+   100vw×100vh; z-index:10000 }` (web/app/globals.css) makes the RECEIVER's ongoing screen
+   full-bleed — verified full-screen on the callee, no header/chat bleed. The CALLER's connected
+   view is a *different, in-flow* container the kit renders below the app header, so the header
+   still shows on the caller side; the complete fix needs the skill to ship a full-viewport wrapper
+   for BOTH call surfaces. (An `.cc-call-overlay:not(:empty)` opaque backdrop is NOT viable — the
+   idle overlay isn't reliably `:empty`, so it covers the app and blocks clicks.)
 
 ## SDK packaging (CometChat product, not docs)
 - **RN UI Kit ships uncompiled `.tsx` with type errors.** `@cometchat/chat-uikit-react-native`
