@@ -7,9 +7,21 @@ so the conductor halts (never advances past a red gate).
 from __future__ import annotations
 
 
+def _all_agents_ok(items) -> bool:
+    # every codegen unit finished cleanly — NOT truncated (max_turns), NOT errored, NOT timed out.
+    # agentOk is absent on legacy records → default True so old ledgers still read.
+    return all(x.get("agentOk", True) for x in (items or []))
+
+
 def baseline(r: dict) -> bool:
-    # GATE.baseline: compiles + committed locally
-    return bool(r) and r.get("buildExitCode") == 0 and bool(r.get("committedSha"))
+    # GATE.baseline: compiles + committed locally + no component's codegen was truncated/errored
+    return bool(r) and r.get("buildExitCode") == 0 and bool(r.get("committedSha")) \
+        and _all_agents_ok(r.get("components"))
+
+
+def containerize(r: dict) -> bool:
+    # GATE.containerize: a docker-compose was actually produced (boot depends on it)
+    return bool(r) and r.get("composeCreated") is True
 
 
 def baseline_up(b: dict) -> bool:
@@ -19,8 +31,10 @@ def baseline_up(b: dict) -> bool:
 
 
 def integrate(r: dict) -> bool:
-    # GATE.integrate: integrated code compiles
-    return bool(r) and r.get("compileExitCode") == 0
+    # GATE.integrate: integrated code compiles AND no component's codegen was truncated/errored.
+    # (A 120-turn-truncated integration that happens to compile must NOT pass — that was the #1
+    # "success reported when functionality is broken" mechanism.)
+    return bool(r) and r.get("compileExitCode") == 0 and _all_agents_ok(r.get("reports"))
 
 
 def integrated_up(v: dict) -> bool:

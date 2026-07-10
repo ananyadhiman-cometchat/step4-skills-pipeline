@@ -22,10 +22,14 @@ try {
   R.login = true
   await p.goto(`${WEB}/conversations`, { waitUntil: 'networkidle' })
   await p.waitForTimeout(5000)
-  R.sdkReady = (await p.getByTestId('cometchat-conversation-list').count()) > 0
+  // SDK-init signal: the kit's own conversation list rendered (falls back to the kit class if the app
+  // didn't add the testid). App login alone is NOT proof the CometChat SDK initialised.
+  R.sdkReady = (await p.getByTestId('cometchat-conversation-list').count()) > 0 ||
+               (await p.locator('.cometchat-conversations, .cometchat-conversations__list').count()) > 0
   await p.locator('.cometchat-conversations__list-item, .cometchat-list-item').first().click()
   await p.waitForTimeout(3500)
-  R.seedMsgVisible = (await p.getByText(/camera/i).count()) > 0
+  // the ACTUAL seeded message text (cometchat.seed_conversation), not a coincidental /camera/ substring
+  R.seedMsgVisible = (await p.getByText('automated call-test seed', { exact: false }).count()) > 0
   const input = p.locator('.cometchat-message-composer [contenteditable="true"], .cometchat-message-composer__input, .cometchat-message-composer textarea').first()
   R.composerFound = (await input.count()) > 0
   const msg = 'Yes it is available! (e2e ' + Date.now().toString().slice(-5) + ')'
@@ -33,11 +37,13 @@ try {
   const send = p.locator('.cometchat-message-composer__send-button, [class*="send-button" i]').first()
   if (await send.count() > 0) await send.click(); else await p.keyboard.press('Enter')
   await p.waitForTimeout(3000)
-  R.msgSent = (await p.getByText(msg.slice(0, 20)).count()) > 0
+  R.msgSent = (await p.getByText(msg, { exact: false }).count()) > 0   // the FULL unique text, not a 20-char prefix
   const call = p.locator('.cometchat-call-button__voice button, .cometchat-call-button__voice, .cometchat-call-button__video button').first()
   await call.click()
   await p.waitForTimeout(4000)
-  R.callUI = (await p.locator('[class*="outgoing" i], [class*="ongoing-call" i], [class*="calling" i], [class*="cometchat-call" i]').count()) > 0
+  // a REAL call-session surface that appears AFTER the click — NOT `[class*=cometchat-call]`, which
+  // matches the call BUTTON that is always present the moment the conversation opens (false green).
+  R.callUI = (await p.locator('.cometchat-outgoing-call, .cometchat-ongoing-call, [class*="outgoing-call" i], [class*="ongoing-call" i], [class*="calling" i]').count()) > 0
   if (SHOT) await p.screenshot({ path: SHOT })
 } catch (e) { R.error = String(e).slice(0, 160) }
 R.pageErrors = errs.slice(0, 5)

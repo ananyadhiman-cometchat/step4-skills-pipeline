@@ -81,28 +81,48 @@ def check_moderation(env_file, slug) -> dict:
         stored = (resp.get("data", {}) or {}).get("data", {}).get("text", "") or resp.get("data", {}).get("text", "")
     except Exception:
         stored = ""
-    masked = bool(stored) and stored != probe                     # extension rewrote the text
+    # A data-masking extension rewrites the DELIVERED copy, not necessarily the synchronous send-ack —
+    # so re-fetch the stored message as the receiver and inspect the persisted text + moderation meta.
+    refetched, moderated_meta = "", False
+    try:
+        _, got = _req(f"{_api(cfg)}/messages?per_page=10&category=message", cfg, method="GET", on_behalf=b)
+        for m in reversed(got.get("data", []) if isinstance(got, dict) else []):
+            d = m.get("data", {}) or {}
+            t = d.get("text", "")
+            if d.get("metadata", {}).get("@injected", {}).get("extensions", {}).get("data-masking") \
+               or d.get("moderation"):
+                moderated_meta = True
+            if t:
+                refetched = t
+                break
+    except Exception:
+        pass
+    masked = (bool(stored) and stored != probe) or (bool(refetched) and refetched != probe)  # text rewritten
     blocked = code not in (200, 201)                              # extension rejected the send
-    flagged = bool((resp.get("data", {}) or {}).get("moderation") or resp.get("moderation"))
+    flagged = moderated_meta or bool((resp.get("data", {}) or {}).get("moderation") or resp.get("moderation"))
     active = masked or blocked or flagged
     return {"sendCode": code, "active": active, "masked": masked, "blocked": blocked,
             "flagged": flagged, "sent": probe, "stored": stored[:160],
             "note": "moderation active" if active else "no moderation transform observed (extension likely not enabled in dashboard)"}
 
 
-def call_answered(env_file, slug, since_ts, poll_s: int = 12) -> dict:
+def call_answered(env_file, slug, since_ts, poll_s: int = 12, uid: str | None = None) -> dict:
     """Deterministic 'was the call answered?' — reads CometChat's SERVER-side call log via REST,
     independent of whether the browsers' WebRTC MEDIA held. Call messages carry an `action`:
     initiated → ongoing (ANSWERED) → ended. We look for an `ongoing` action newer than `since_ts`.
     Polls briefly because the server-side action lands a beat after the client accepts.
-    Returns {answered, action?, sentAt?}. This is the anti-flake verdict for the headless call e2e."""
+    Returns {answered, action?, sentAt?}. This is the anti-flake verdict for the headless call e2e.
+
+    The reader uid defaults to the use case's ACTUAL web call-test uid (call_test_accounts) — the old
+    hardcoded `{slug}-buy-001` exists only for mkt, so for every other use case this check silently
+    returned answered=False and the 'media-independent anchor' was a no-op."""
     import time
     cfg = _cfg(env_file)
-    buyer = f"{slug}-buy-001"
+    reader = uid or call_test_accounts(slug)["web"][1]
     url = f"{_api(cfg)}/messages?per_page=40&category=call"
     deadline = time.time() + poll_s
     while True:
-        code, resp = _req(url, cfg, method="GET", on_behalf=buyer)
+        code, resp = _req(url, cfg, method="GET", on_behalf=reader)
         for m in (resp.get("data", []) if isinstance(resp, dict) else []):
             action = (m.get("data", {}) or {}).get("action")
             if action == "ongoing" and int(m.get("sentAt", 0)) >= int(since_ts):

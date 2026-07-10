@@ -56,10 +56,13 @@ def _npm_gate(comp_dir: Path, prefer: list[str], fallback_tsc=True) -> tuple[int
         code, out = _run(["npm", "run", script], cwd=d)
         # A type-check that only fails INSIDE node_modules is a broken-library-types issue
         # (e.g. CometChat UI Kit ships type-imperfect .tsx), NOT an app/integration failure.
-        # The app bundles + runs regardless. Gate on the app's OWN errors only.
+        # RELAX ONLY when the failure genuinely IS that: there ARE `error TS` lines and every one is
+        # inside node_modules. A non-TS failure (exit!=0 with ZERO `error TS` lines — OOM, tsconfig
+        # resolution error, tool crash) is a REAL failure and must NOT be swallowed into a pass.
         if code != 0 and any(k in script for k in ("type", "check", "tsc")):
-            app_errs = [l for l in out.splitlines() if "error TS" in l and "node_modules" not in l]
-            if not app_errs:
+            ts_lines = [l for l in out.splitlines() if "error TS" in l]
+            app_errs = [l for l in ts_lines if "node_modules" not in l]
+            if ts_lines and not app_errs:
                 return 0, "type-check: only node_modules (library) type errors — app code clean\n" + _tail(out)
         return code, out
     if fallback_tsc and (comp_dir / "tsconfig.json").exists():
@@ -67,27 +70,30 @@ def _npm_gate(comp_dir: Path, prefer: list[str], fallback_tsc=True) -> tuple[int
     return 0, f"no build/typecheck script among {prefer} — scaffolding present, passing"
 
 
-def build_gate(kind: str, comp_dir: Path) -> dict:
+def build_gate(kind: str, comp_dir: Path, env: dict | None = None) -> dict:
+    """`env` (optional) is threaded to the native toolchains so a self-heal (e.g. JAVA_HOME=JDK17)
+    actually takes effect on the re-gate — previously the heal wrote JAVA_HOME into a dict build_gate
+    never read, so the most-common UC1 gradle failure was structurally unrecoverable."""
     d = str(comp_dir)
     if kind == "web":
         code, out = _npm_gate(comp_dir, ["build", "type-check", "typecheck"])
-    elif kind == "mobile":  # React Native — no 'build' script; typecheck is the real gate
-        code, out = _npm_gate(comp_dir, ["type-check", "typecheck", "build:check", "tsc", "lint"])
-    elif kind == "app":  # Flutter
-        code, out = _run(["flutter", "analyze"], cwd=d)
+    elif kind == "mobile":  # React Native — no 'build' script; typecheck is the real gate. NOT lint
+        code, out = _npm_gate(comp_dir, ["type-check", "typecheck", "build:check", "tsc"])
+    elif kind == "app":  # Flutter — errors are fatal; lint infos/warnings are NOT (they falsely RED the gate)
+        code, out = _run(["flutter", "analyze", "--no-fatal-infos", "--no-fatal-warnings"], cwd=d, env=env)
     elif kind == "android":
         gw = comp_dir / "gradlew"
-        code, out = _run(["./gradlew", "assembleDebug"], cwd=d) if gw.exists() else (127, "no gradlew")
+        code, out = _run(["./gradlew", "assembleDebug"], cwd=d, env=env) if gw.exists() else (127, "no gradlew")
     elif kind == "ios":
-        code, out = _run(["xcodebuild", "-scheme", comp_dir.name, "-sdk", "iphonesimulator", "build"], cwd=d)
+        code, out = _run(["xcodebuild", "-scheme", comp_dir.name, "-sdk", "iphonesimulator", "build"], cwd=d, env=env)
     elif kind == "backend":
-        code, out = _backend_build(comp_dir)
+        code, out = _backend_build(comp_dir, env=env)
     else:
         code, out = 127, f"unknown kind {kind}"
     return {"kind": kind, "buildExitCode": code, "outputTail": _tail(out)}
 
 
-def _backend_build(d: Path) -> tuple[int, str]:
+def _backend_build(d: Path, env: dict | None = None) -> tuple[int, str]:
     """LANGUAGE-NATIVE compile/syntax gate — the build stage checks the CODE, not that Docker builds
     (Docker is the containerize stage's job). Language checks come FIRST; docker-compose is only a
     last resort when no language toolchain is recognized (and it runs in the dir that HAS the compose
@@ -98,15 +104,18 @@ def _backend_build(d: Path) -> tuple[int, str]:
         cmd = ('out=$(find app routes database config public bootstrap -name "*.php" -print0 2>/dev/null '
                '| xargs -0 -r -n1 php -l 2>&1 | grep -iE "Parse error|Fatal error|Errors parsing" || true); '
                '[ -z "$out" ] && echo "php lint clean" || { echo "$out"; exit 1; }')
-        return _run(["bash", "-lc", cmd], cwd=str(d))
-    if (d / "go.mod").exists():               return _run(["go", "build", "./..."], cwd=str(d))
-    if (d / "pom.xml").exists():              return _run(["mvn", "-q", "-B", "compile", "-DskipTests"], cwd=str(d))
+        return _run(["bash", "-lc", cmd], cwd=str(d), env=env)
+    if (d / "go.mod").exists():               return _run(["go", "build", "./..."], cwd=str(d), env=env)
+    if (d / "pom.xml").exists():              return _run(["mvn", "-q", "-B", "compile", "-DskipTests"], cwd=str(d), env=env)
     if (d / "requirements.txt").exists() or (d / "pyproject.toml").exists():
-        return _run(["python3", "-m", "compileall", "-q", "."], cwd=str(d))
-    if (d / "package.json").exists():         return _run(["npm", "install"], cwd=str(d))
+        return _run(["python3", "-m", "compileall", "-q", "."], cwd=str(d), env=env)
+    if (d / "package.json").exists():
+        # NOT just `npm install`: a Node/TS backend must actually type-check/build, else a backend
+        # with type/syntax errors passes the gate as long as deps resolve. Reuse the JS typecheck gate.
+        return _npm_gate(d, ["build", "type-check", "typecheck", "compile"])
     for cd in (d, d.parent):                  # last resort: docker, in the dir that actually has the compose file
         if (cd / "docker-compose.yml").exists() or (cd / "compose.yaml").exists():
-            return _run(["docker", "compose", "build"], cwd=str(cd))
+            return _run(["docker", "compose", "build"], cwd=str(cd), env=env)
     return 0, "backend: no recognized build file — configure"
 
 
@@ -161,6 +170,30 @@ def run_chatcall_web(repo_dir: Path, email: str, password: str, web_url: str, sh
             except Exception:
                 pass
     return {"error": "no verdict json", "tail": _tail(out)}
+
+
+def run_twoparty_chat(repo_dir: Path, web_url: str, shot_dir: str, a_email: str, b_email: str,
+                      password: str, nonce: str) -> dict:
+    """CROSS-PARTY real-time RECEIVE proof: B sends a unique NONCE, A must render it (live socket).
+    This is the source of truth for chat working — it catches the 'socket dead but REST login works'
+    bug the single-browser heuristics silently passed. Returns the JSON verdict (chatWorks=received)."""
+    web = repo_dir / "web"
+    src = Path(__file__).resolve().parent.parent / "e2e" / "twoparty_chat.web.mjs"
+    if not web.exists() or not src.exists():
+        return {"error": "no web/ or twoparty_chat script", "chatWorks": False}
+    dst = web / "_twoparty_chat_verify.mjs"
+    dst.write_text(src.read_text())
+    env = {"WEB_URL": web_url, "A_EMAIL": a_email, "B_EMAIL": b_email, "E2E_PASSWORD": password,
+           "NONCE": nonce, "SHOT_DIR": shot_dir}
+    code, out = _run(["node", str(dst)], cwd=str(web), timeout=180, env=env)
+    dst.unlink(missing_ok=True)
+    for line in reversed((out or "").splitlines()):
+        if line.strip().startswith("{"):
+            try:
+                return json.loads(line.strip())
+            except Exception:
+                pass
+    return {"error": "no verdict json", "tail": _tail(out), "chatWorks": False, "exitCode": code}
 
 
 def run_twoparty_web(repo_dir: Path, web_url: str, shot_dir: str,
