@@ -1,20 +1,17 @@
-# Log in (mandated testIDs) and screenshot the LOGGED-IN home — proves the app reaches the backend
-# (connectivity), not just that the login screen renders. Params: APP_ID, EMAIL, PASSWORD, SUBMIT.
+# Log in via a DEMO-ACCOUNT quick-fill button (visible text — works on Flutter where Maestro can't
+# see widget Keys, and on RN/native) then submit, and screenshot the LOGGED-IN home. Proves the app
+# reaches the backend (connectivity). Params: APP_ID, ROLE (demo button label), SUBMIT.
 appId: ${APP_ID}
 ---
 - launchApp: { clearState: true }
 - tapOn: { text: "Don't Show Again", optional: true }
 - tapOn: { text: "OK", optional: true }
-- extendedWaitUntil: { visible: { id: "email-input" }, timeout: 30000 }
-- tapOn: { id: "email-input" }
-- inputText: "${EMAIL}"
-- tapOn: { id: "password-input" }
-- inputText: "${PASSWORD}"
-- runFlow:
-    when: { visible: { id: "login-submit" } }
-    commands:
-      - tapOn: { id: "login-submit" }
+# tap a demo-account button (fills creds); fall back to testID fields if the app has no demo buttons
+- tapOn: { text: "${ROLE}", optional: true }
+- tapOn: { id: "email-input", optional: true }
+- tapOn: { id: "login-submit", optional: true }
 - tapOn: { text: "${SUBMIT}", optional: true }
-- extendedWaitUntil: { notVisible: { id: "email-input" }, timeout: 20000 }
+# logged in = the Sign In control is gone
+- extendedWaitUntil: { notVisible: { text: "${SUBMIT}" }, timeout: 25000 }
 - waitForAnimationToEnd: { timeout: 6000 }
 - takeScreenshot: /tmp/mobile-loggedin

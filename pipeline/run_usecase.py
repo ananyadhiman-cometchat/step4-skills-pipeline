@@ -306,8 +306,8 @@ def stage_demo(S, uc):
         aid = providers.resolve_app_id(c["kind"], repo / c["dir"])
         for plat, shot in prov.demo(ctx).items():   # android / ios / web
             shots[plat] = shot
-            if plat in ("android", "ios") and aid:
-                plat_app_id[plat] = aid
+            if plat in ("android", "ios"):           # per-platform id (android != ios bundle for Flutter)
+                plat_app_id[plat] = shot.get("appId") or aid
     # LOGIN + screenshot the logged-in home for each mobile client that launched OK — proves the app
     # reaches the backend (connectivity), which the launch screen alone doesn't. Uses a seeded account.
     li_acc = cometchat.call_test_accounts(uc["slug"]); li_email = li_acc["mobile"][0]

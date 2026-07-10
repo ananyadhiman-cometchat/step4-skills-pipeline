@@ -81,18 +81,20 @@ class FlutterProvider:
                           f'flutter build apk --release --dart-define=API_URL={ctx["api_android"]} {defs}', cwd=str(app))
             apk = next(iter((app / "build/app/outputs/flutter-apk").glob("app-release.apk")), None) if code == 0 else None
             p = str(demo / "android.png"); ok = False
+            and_id = resolve_app_id("app", app) or "com.example.app"
             if apk:
-                ok = mobile.install_launch_shot_android(str(apk), p, pkg=self._pkg(app))
-            out["android"] = {"ok": ok, "path": p, "buildExit": code, "tail": mobile._tail(o)}
-        # iOS — simulator .app (no codesign) → install via simctl
+                ok = mobile.install_launch_shot_android(str(apk), p, pkg=and_id)
+            out["android"] = {"ok": ok, "path": p, "buildExit": code, "appId": and_id, "tail": mobile._tail(o)}
+        # iOS — simulator .app (no codesign) → install via simctl. iOS bundle id ≠ android applicationId.
         mobile.boot_ios()
         code, o = _sh(f'{mobile.UTF8}; flutter build ios --simulator --debug '
                       f'--dart-define=API_URL={ctx["api_ios"]} {defs}', cwd=str(app))
         appbin = next(iter((app / "build/ios/iphonesimulator").glob("*.app")), None) if code == 0 else None
         p = str(demo / "ios.png"); ok = False
+        ios_bundle = resolve_ios_bundle(app) or self._pkg(app)
         if appbin:
-            ok = mobile.install_launch_shot_ios(str(appbin), p, bundle=self._pkg(app))
-        out["ios"] = {"ok": ok, "path": p, "buildExit": code, "tail": mobile._tail(o)}
+            ok = mobile.install_launch_shot_ios(str(appbin), p, bundle=ios_bundle)
+        out["ios"] = {"ok": ok, "path": p, "buildExit": code, "appId": ios_bundle, "tail": mobile._tail(o)}
         # Web — static build; the boot/containerize stage serves build/web on :3000
         code, o = _sh(f'flutter build web --dart-define=API_URL={ctx.get("api_web","/api")} {defs}', cwd=str(app))
         out["web"] = {"ok": code == 0, "buildExit": code, "built": str(app / "build/web"), "tail": mobile._tail(o)}
@@ -155,7 +157,7 @@ def host_build_flutter_web(app_dir, api_url: str = "http://localhost:8080") -> d
 
 
 def login_and_shot(platform: str, app_id: str, email: str, password: str, out_png: str,
-                   submit: str = "Sign In") -> dict:
+                   submit: str = "Sign In", role: str = "Member") -> dict:
     """Drive the mandated login (email-input/password-input/login-submit) as a real account and
     screenshot the LOGGED-IN home — proves the app reaches the backend (connectivity), which the
     launch screenshot alone does not. Uses Maestro on the booted device. Returns {ok, shot}."""
@@ -170,7 +172,7 @@ def login_and_shot(platform: str, app_id: str, email: str, password: str, out_pn
     else:
         dev = ["--device", "emulator-5554"]
     cmd = [maestro, *dev, "test", str(flow), "-e", f"APP_ID={app_id}", "-e", f"EMAIL={email}",
-           "-e", f"PASSWORD={password}", "-e", f"SUBMIT={submit}"]
+           "-e", f"PASSWORD={password}", "-e", f"SUBMIT={submit}", "-e", f"ROLE={role}"]
     src = Path("/tmp/mobile-loggedin.png"); src.unlink(missing_ok=True)
     try:
         p = subprocess.run(cmd, text=True, capture_output=True, timeout=180,
@@ -182,6 +184,24 @@ def login_and_shot(platform: str, app_id: str, email: str, password: str, out_pn
         Path(out_png).write_bytes(src.read_bytes()); src.unlink()
         return {"ok": rc == 0, "shot": out_png}
     return {"ok": False, "shot": None, "tail": tail}
+
+
+def resolve_ios_bundle(app_dir) -> str | None:
+    """iOS bundle id from the Xcode project — Flutter often generates a DIFFERENT id for iOS
+    (camelCase, e.g. io.com.communityForum) than the Android applicationId (snake_case). Using the
+    Android id to `simctl launch` silently fails → the sim shows the home screen."""
+    import re
+    pbx = Path(app_dir) / "ios/Runner.xcodeproj/project.pbxproj"
+    if pbx.exists():
+        for b in re.findall(r"PRODUCT_BUNDLE_IDENTIFIER = ([^;]+);", pbx.read_text()):
+            b = b.strip().strip('"')
+            if b and "Test" not in b:
+                return b
+    for plist in Path(app_dir).glob("ios/Runner/Info.plist"):
+        m = re.search(r"CFBundleIdentifier</key>\s*<string>([^<]+)", plist.read_text())
+        if m and "$(" not in m.group(1):
+            return m.group(1)
+    return None
 
 
 def resolve_app_id(kind: str, app_dir) -> str | None:

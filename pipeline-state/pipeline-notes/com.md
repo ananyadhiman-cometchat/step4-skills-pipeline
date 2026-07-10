@@ -15,3 +15,15 @@
   (app_alive rubric → catches red-error/blank/spinner/wrong-app — e.g. web stuck-loading), and (b) does
   a LOGIN→home screenshot per mobile client (providers.login_and_shot + login_shot.flow.yaml) to prove
   backend connectivity, vision-reviewed with the feed_loaded rubric. All general (every UC).
+
+### UC2 demo — deeper findings (all fixed/recorded)
+- **[containerize] JWT_SECRET too short → login 500 → app stuck on 'loading'.** compose set
+  `JWT_SECRET: dev-jwt-secret-smoke-test` (25 chars/200 bits); tymon/jwt-auth Lcobucci needs ≥256 bits.
+  FIXED (com: 64-char secret) + generalized in the containerize prompt (auth secrets ≥32 bytes).
+- **[pipeline] iOS bundle id ≠ android applicationId (Flutter).** Flutter generated
+  io.com.communityForum (iOS) vs io.com.community_forum (android). resolve_ios_bundle() reads the
+  Xcode PRODUCT_BUNDLE_IDENTIFIER; provider now uses per-platform ids. (iOS was launching the wrong
+  bundle → sim home screen.)
+- **[skills] Flutter login testIDs use widget Key(), which Maestro can't see.** login-shot now logs in
+  via the demo-account BUTTON (visible text). The build prompt should mandate Semantics(identifier:)
+  for Flutter login fields (not just Key) so testID-based automation works.

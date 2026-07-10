@@ -61,6 +61,7 @@ Then, per component:
    - web: build ./{web_dir}, API base URL → backend (http://localhost:8080 from host / http://backend:8000
      internal), **host port 3000 → container 3000**, depends_on backend.
    Use the standard COMETCHAT_*-free env var names already in the .env.example files.
+   - **Auth/JWT secrets MUST be ≥32 bytes (256 bits).** A short placeholder like `dev-jwt-secret` (200 bits) makes JWT libs (e.g. tymon/jwt-auth Lcobucci) throw 'Key provided is shorter than 256 bits' → login 500s → the app hangs on 'loading'. Use a long random value (e.g. `openssl rand -hex 32`).
 
 Host ports MUST be backend=8080 and web=3000 (the boot health checks target those exact ports).
 After writing the files, do NOT run docker or git — the harness boots and commits.
