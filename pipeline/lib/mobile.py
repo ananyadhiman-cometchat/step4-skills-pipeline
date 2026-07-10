@@ -161,7 +161,7 @@ def clean_stale_apps(keep_pkg: str | None = None) -> list[str]:
 def install_launch_shot_android(apk: str, out_png: str, pkg="com.mkt.mobile") -> bool:
     clean_stale_apps(keep_pkg=pkg)          # remove prior-UC apps so we can't screenshot the wrong one
     _adb("uninstall", pkg)                  # clean install of THIS app (no stale state)
-    _adb("install", "-r", apk, timeout=180)
+    _adb("install", "-r", "-g", apk, timeout=180)   # -g pre-grants runtime perms (no dialog stealing foreground)
     _adb("shell", "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1")
     time.sleep(6)
     sz = _adb("shell", "wm", "size").stdout   # dismiss the Android 15 "16 KB compatibility" dialog

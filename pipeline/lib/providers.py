@@ -61,12 +61,9 @@ class FlutterProvider:
     family = "flutter"; platforms = ["android", "ios", "web"]
 
     def _pkg(self, app: Path) -> str:
-        gradle = app / "android/app/build.gradle"
-        if gradle.exists():
-            for line in gradle.read_text().splitlines():
-                if "applicationId" in line:
-                    return line.split('"')[1] if '"' in line else line.split("'")[1]
-        return "com.example.app"
+        # Use the shared resolver (reads build.gradle AND build.gradle.kts + app.json) — a bare
+        # build.gradle reader misses Kotlin-DSL projects and falls back to the wrong com.example.app.
+        return resolve_app_id("app", app) or "com.example.app"
 
     def demo(self, ctx) -> dict:
         app = ctx["app_dir"]; demo = ctx["demo_dir"]; out = {}
@@ -174,13 +171,17 @@ def login_and_shot(platform: str, app_id: str, email: str, password: str, out_pn
         dev = ["--device", "emulator-5554"]
     cmd = [maestro, *dev, "test", str(flow), "-e", f"APP_ID={app_id}", "-e", f"EMAIL={email}",
            "-e", f"PASSWORD={password}", "-e", f"SUBMIT={submit}"]
-    p = subprocess.run(cmd, text=True, capture_output=True, timeout=180,
-                       env={**os.environ, "PATH": os.path.expanduser("~/.maestro/bin:") + os.environ.get("PATH", "")})
-    src = Path("/tmp/mobile-loggedin.png")
+    src = Path("/tmp/mobile-loggedin.png"); src.unlink(missing_ok=True)
+    try:
+        p = subprocess.run(cmd, text=True, capture_output=True, timeout=180,
+                           env={**os.environ, "PATH": os.path.expanduser("~/.maestro/bin:") + os.environ.get("PATH", "")})
+        rc, tail = p.returncode, (p.stdout or "")[-200:]
+    except subprocess.TimeoutExpired:
+        rc, tail = 124, "login flow timed out (app may not have reached the login form)"
     if src.exists():
         Path(out_png).write_bytes(src.read_bytes()); src.unlink()
-        return {"ok": p.returncode == 0, "shot": out_png}
-    return {"ok": False, "shot": None, "tail": (p.stdout or "")[-200:]}
+        return {"ok": rc == 0, "shot": out_png}
+    return {"ok": False, "shot": None, "tail": tail}
 
 
 def resolve_app_id(kind: str, app_dir) -> str | None:

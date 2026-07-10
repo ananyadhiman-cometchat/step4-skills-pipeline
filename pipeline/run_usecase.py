@@ -314,10 +314,13 @@ def stage_demo(S, uc):
     li_pw = uc.get("e2ePassword", "Mkt@seed2026!")
     for plat in ("android", "ios"):
         if shots.get(plat, {}).get("ok") and plat_app_id.get(plat):
-            li = providers.login_and_shot(plat, plat_app_id[plat], li_email, li_pw, str(demo / f"{plat}-loggedin.png"))
+            try:
+                li = providers.login_and_shot(plat, plat_app_id[plat], li_email, li_pw, str(demo / f"{plat}-loggedin.png"))
+            except Exception as e:
+                li = {"ok": False, "shot": None, "err": str(e)[:120]}
             if li.get("shot"):
                 shots[f"{plat}-loggedin"] = {"ok": li["ok"], "path": li["shot"]}
-                print(f"  {plat} login→home shot: ok={li['ok']}")             # per-UC package/bundle for the Maestro flows
+            print(f"  {plat} login→home shot: ok={li.get('ok')}")             # per-UC package/bundle for the Maestro flows
     # AUTOMATED mobile↔web call matrix (boot-2) — android/ios clients that built OK ring the web peer.
     # Parameterized per use case: the app id + the two call-test accounts (not mkt-hardcoded).
     if integrated:
