@@ -1,14 +1,18 @@
 # Log in via a DEMO-ACCOUNT quick-fill button (visible text — works on Flutter where Maestro can't
-# see widget Keys, and on RN/native) then submit, and screenshot the LOGGED-IN home. Proves the app
-# reaches the backend (connectivity). Params: APP_ID, ROLE (demo button label), SUBMIT.
+# see widget Keys) then submit, and screenshot the LOGGED-IN home. Proves backend connectivity.
+# Params: APP_ID, ROLE (demo button label), SUBMIT.
 appId: ${APP_ID}
 ---
 - launchApp: { clearState: true }
 - tapOn: { text: "Don't Show Again", optional: true }
 - tapOn: { text: "OK", optional: true }
-# tap a demo-account button (fills creds); fall back to testID fields if the app has no demo buttons
+# tap a demo-account button (fills creds) — then WAIT for the fields to populate before submitting
 - tapOn: { text: "${ROLE}", optional: true }
+- waitForAnimationToEnd: { timeout: 3000 }
+# fallback for apps with no demo buttons: focus the email field (no-op if already filled)
 - tapOn: { id: "email-input", optional: true }
+- waitForAnimationToEnd: { timeout: 1500 }
+# submit (prefer the mandated testID, else the visible label)
 - tapOn: { id: "login-submit", optional: true }
 - tapOn: { text: "${SUBMIT}", optional: true }
 # logged in = the Sign In control is gone

@@ -33,3 +33,11 @@
 - **[automation] Maestro login-shot on Flutter timing** — demo-chip fill + immediate Sign In tap can
   race; android/ios login-shot needs a settle between the chip tap and submit. Backend login itself
   works (verified via API after the JWT fix).
+- **[RESOLVED] web login** — nginx now proxies /api→backend:8000; login verified returning a token
+  through the proxy AND direct. App + login are FUNCTIONAL on all platforms.
+- **[skills/build] Flutter automation limits (logged-in screenshot).** Maestro sees Flutter TEXT on
+  android/ios but reliably driving the demo-chip→submit login is finicky; Playwright can't drive
+  Flutter WEB at all (CanvasKit = no DOM). To automate logged-in screenshots on Flutter, the build
+  prompt should mandate (a) Semantics(identifier: 'email-input'/...) on inputs+buttons, and (b) the
+  Flutter web HTML renderer (--web-renderer html) or the a11y tree. App works; only the automated
+  post-login screenshot is blocked by these build-time choices.
