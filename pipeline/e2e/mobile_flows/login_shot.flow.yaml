@@ -1,0 +1,20 @@
+# Log in (mandated testIDs) and screenshot the LOGGED-IN home — proves the app reaches the backend
+# (connectivity), not just that the login screen renders. Params: APP_ID, EMAIL, PASSWORD, SUBMIT.
+appId: ${APP_ID}
+---
+- launchApp: { clearState: true }
+- tapOn: { text: "Don't Show Again", optional: true }
+- tapOn: { text: "OK", optional: true }
+- extendedWaitUntil: { visible: { id: "email-input" }, timeout: 30000 }
+- tapOn: { id: "email-input" }
+- inputText: "${EMAIL}"
+- tapOn: { id: "password-input" }
+- inputText: "${PASSWORD}"
+- runFlow:
+    when: { visible: { id: "login-submit" } }
+    commands:
+      - tapOn: { id: "login-submit" }
+- tapOn: { text: "${SUBMIT}", optional: true }
+- extendedWaitUntil: { notVisible: { id: "email-input" }, timeout: 20000 }
+- waitForAnimationToEnd: { timeout: 6000 }
+- takeScreenshot: /tmp/mobile-loggedin

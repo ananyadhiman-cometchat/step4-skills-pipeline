@@ -130,23 +130,58 @@ def _adb(*a, timeout=60):
     return subprocess.run([ADB, *a], text=True, capture_output=True, timeout=timeout)
 
 
+def _fg_pkg_android() -> str:
+    """The package currently in the foreground (resumed) — to verify the RIGHT app is showing."""
+    out = _adb("shell", "dumpsys", "activity", "activities").stdout
+    for key in ("mResumedActivity", "topResumedActivity", "mCurrentFocus"):
+        for line in out.splitlines():
+            if key in line and "/" in line:
+                for tok in line.split():
+                    if "/" in tok and "." in tok:
+                        return tok.split("/")[0].strip("{").strip()
+    return ""
+
+
+def clean_stale_apps(keep_pkg: str | None = None) -> list[str]:
+    """Uninstall PREVIOUS use cases' apps from the emulator so a demo screenshot can never capture a
+    stale app (UC1 hardcoded teardown to com.mkt.mobile and left every prior app behind — that's why
+    UC2's Android shot showed the Marketplace app). Removes step4-shaped third-party packages except
+    `keep_pkg`. Idempotent."""
+    removed = []
+    out = _adb("shell", "pm", "list", "packages", "-3").stdout   # -3 = third-party only (safe)
+    pats = ("com.mkt", "io.com", "com.example", "com.step4", ".mobile", "forum", "marketplace",
+            "deskline", "delivery", "dating", "fintech", "creator", "rideshare", "event")
+    for line in out.splitlines():
+        p = line.replace("package:", "").strip()
+        if p and p != keep_pkg and any(x in p for x in pats):
+            _adb("uninstall", p); removed.append(p)
+    return removed
+
+
 def install_launch_shot_android(apk: str, out_png: str, pkg="com.mkt.mobile") -> bool:
+    clean_stale_apps(keep_pkg=pkg)          # remove prior-UC apps so we can't screenshot the wrong one
+    _adb("uninstall", pkg)                  # clean install of THIS app (no stale state)
     _adb("install", "-r", apk, timeout=180)
     _adb("shell", "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1")
     time.sleep(6)
-    # dismiss the Android 15 "16 KB compatibility" dialog if present (buttons at bottom of card)
-    sz = _adb("shell", "wm", "size").stdout
+    sz = _adb("shell", "wm", "size").stdout   # dismiss the Android 15 "16 KB compatibility" dialog
     if "x" in sz:
         w, h = [int(x) for x in sz.split(":")[-1].strip().split("x")[:2]]
-        _adb("shell", "input", "tap", str(int(w * 0.90)), str(int(h * 0.936)))  # Don't Show Again
-    # poll until the app renders real content (login screen) vs the blank loading screen
+        _adb("shell", "input", "tap", str(int(w * 0.90)), str(int(h * 0.936)))
+    # Poll until OUR app is foreground AND rendered real content. If it launched then vanished
+    # (release-build crash — e.g. the go_router assertion), the foreground is NOT our pkg → FAIL,
+    # so we never pass a screenshot of the launcher or a previous app.
+    ok = False
     for _ in range(12):
         with open(out_png, "wb") as f:
             subprocess.run([ADB, "exec-out", "screencap", "-p"], stdout=f)
-        if os.path.getsize(out_png) > 60000:
-            return True
+        fg = _fg_pkg_android()
+        if fg == pkg and os.path.getsize(out_png) > 60000:
+            ok = True; break
         time.sleep(6)
-    return os.path.getsize(out_png) > 60000
+    if not ok:
+        print(f"    android launch check: foreground='{_fg_pkg_android()}' expected='{pkg}' — app not showing (crash?)")
+    return ok
 
 
 # ---------- iOS (standalone release .app) ----------
@@ -172,11 +207,15 @@ def build_ios(mobile_dir: Path, api_url: str) -> dict:
 
 
 def install_launch_shot_ios(app: str, out_png: str, bundle="com.mkt.mobile", device="iPhone 16") -> bool:
+    subprocess.run(["xcrun", "simctl", "terminate", device, bundle], capture_output=True)
+    subprocess.run(["xcrun", "simctl", "uninstall", device, bundle], capture_output=True)  # clean install
     subprocess.run(["xcrun", "simctl", "install", device, app], capture_output=True)
-    subprocess.run(["xcrun", "simctl", "launch", device, bundle], capture_output=True)
+    r = subprocess.run(["xcrun", "simctl", "launch", device, bundle], capture_output=True, text=True)
     time.sleep(14)
-    r = subprocess.run(["xcrun", "simctl", "io", device, "screenshot", out_png], capture_output=True)
-    return r.returncode == 0 and os.path.getsize(out_png) > 40000
+    subprocess.run(["xcrun", "simctl", "io", device, "screenshot", out_png], capture_output=True)
+    # A launched-then-crashed app (or a debug assertion red screen) still produces a screenshot — the
+    # vision judge (app_alive rubric) in the demo stage flags "red error box / blank / spinner".
+    return os.path.getsize(out_png) > 40000 if os.path.exists(out_png) else False
 
 
 # ---------- teardown ----------

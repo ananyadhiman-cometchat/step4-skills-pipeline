@@ -157,6 +157,32 @@ def host_build_flutter_web(app_dir, api_url: str = "http://localhost:8080") -> d
             "exitCode": code, "tail": mobile._tail(out)}
 
 
+def login_and_shot(platform: str, app_id: str, email: str, password: str, out_png: str,
+                   submit: str = "Sign In") -> dict:
+    """Drive the mandated login (email-input/password-input/login-submit) as a real account and
+    screenshot the LOGGED-IN home — proves the app reaches the backend (connectivity), which the
+    launch screenshot alone does not. Uses Maestro on the booted device. Returns {ok, shot}."""
+    maestro = os.path.expanduser("~/.maestro/bin/maestro")
+    flow = Path(__file__).resolve().parent.parent / "e2e" / "mobile_flows" / "login_shot.flow.yaml"
+    dev = []
+    if platform == "ios":
+        out = subprocess.run(["xcrun", "simctl", "list", "devices", "booted"], text=True, capture_output=True).stdout
+        for line in out.splitlines():
+            if "Booted" in line and "(" in line:
+                dev = ["--device", line.split("(")[1].split(")")[0]]; break
+    else:
+        dev = ["--device", "emulator-5554"]
+    cmd = [maestro, *dev, "test", str(flow), "-e", f"APP_ID={app_id}", "-e", f"EMAIL={email}",
+           "-e", f"PASSWORD={password}", "-e", f"SUBMIT={submit}"]
+    p = subprocess.run(cmd, text=True, capture_output=True, timeout=180,
+                       env={**os.environ, "PATH": os.path.expanduser("~/.maestro/bin:") + os.environ.get("PATH", "")})
+    src = Path("/tmp/mobile-loggedin.png")
+    if src.exists():
+        Path(out_png).write_bytes(src.read_bytes()); src.unlink()
+        return {"ok": p.returncode == 0, "shot": out_png}
+    return {"ok": False, "shot": None, "tail": (p.stdout or "")[-200:]}
+
+
 def resolve_app_id(kind: str, app_dir) -> str | None:
     """Read the mobile app's package/bundle id from the built app (for Maestro's appId), per stack."""
     app_dir = Path(app_dir)

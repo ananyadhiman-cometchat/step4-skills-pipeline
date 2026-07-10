@@ -278,10 +278,12 @@ def stage_demo(S, uc):
     shots = {}
     # 1. web + backend via docker — leave up
     if (repo / "docker-compose.yml").exists():
+        if (repo / "app" / "pubspec.yaml").exists():   # Flutter web served static — host-build first
+            providers.host_build_flutter_web(repo / "app")
         up, _ = verify.compose_up(repo)
         hpaths = V.get("backend_health_paths") or ["/health"]
         verify.health_check(V.get("backend_url", "http://localhost:8080"), hpaths, V["backend_health_timeout_s"])
-        if "web" in kinds:
+        if "web" in kinds or (repo / "app" / "pubspec.yaml").exists():   # Node web OR Flutter web
             p = str(demo / "web.png")
             shots["web"] = {"ok": _web_shot(repo, p), "path": p}
     # 2. mobile / native clients — dispatch to the STACK PROVIDER per component (RN / Flutter /
@@ -305,7 +307,17 @@ def stage_demo(S, uc):
         for plat, shot in prov.demo(ctx).items():   # android / ios / web
             shots[plat] = shot
             if plat in ("android", "ios") and aid:
-                plat_app_id[plat] = aid             # per-UC package/bundle for the Maestro flows
+                plat_app_id[plat] = aid
+    # LOGIN + screenshot the logged-in home for each mobile client that launched OK — proves the app
+    # reaches the backend (connectivity), which the launch screen alone doesn't. Uses a seeded account.
+    li_acc = cometchat.call_test_accounts(uc["slug"]); li_email = li_acc["mobile"][0]
+    li_pw = uc.get("e2ePassword", "Mkt@seed2026!")
+    for plat in ("android", "ios"):
+        if shots.get(plat, {}).get("ok") and plat_app_id.get(plat):
+            li = providers.login_and_shot(plat, plat_app_id[plat], li_email, li_pw, str(demo / f"{plat}-loggedin.png"))
+            if li.get("shot"):
+                shots[f"{plat}-loggedin"] = {"ok": li["ok"], "path": li["shot"]}
+                print(f"  {plat} login→home shot: ok={li['ok']}")             # per-UC package/bundle for the Maestro flows
     # AUTOMATED mobile↔web call matrix (boot-2) — android/ios clients that built OK ring the web peer.
     # Parameterized per use case: the app id + the two call-test accounts (not mkt-hardcoded).
     if integrated:
@@ -323,8 +335,26 @@ def stage_demo(S, uc):
                     mobile_calls[f"{plat}-{ct}"] = bool(r.get("callConnected"))
                     print(f"  call-matrix {plat}↔web {ct}: connected={r.get('callConnected')}")
     print(f"  disk free: {mobile.disk_free_gb()}GB")
+    # VISION VERIFY the demo screenshots — each platform must show the REAL app rendered, not a red
+    # error screen (crash), a loading spinner (stuck), a blank, or a previous UC's app. This is what
+    # catches the failures a raw screenshot silently passed (UC2: iOS go_router red screen, web stuck
+    # loading, Android showing the stale mkt app).
+    demo_review = {"skipped": True}
+    if S.get("verify", {}).get("vision_review", True):
+        vs = [{"name": p, "path": shots[p]["path"], "rubric": "app_alive",
+               "context": f"{uc['name']} {p} app launch screen"}
+              for p in ("web", "android", "ios") if shots.get(p, {}).get("path") and os.path.exists(shots[p]["path"])]
+        vs += [{"name": p, "path": shots[p]["path"], "rubric": "feed_loaded",
+                "context": f"{uc['name']} {p} — should show real content (backend reached)"}
+               for p in ("android-loggedin", "ios-loggedin") if shots.get(p, {}).get("path") and os.path.exists(shots[p]["path"])]
+        if vs:
+            demo_review = shotreview.review(vs, uc["slug"], S, str(demo / "demo-review.html"))
+            for r in demo_review.get("results", []):
+                if r.get("correct") is False:
+                    shots.setdefault(r["name"], {})["visionAlive"] = False
+                    print(f"  ⚠ vision: {r['name']} screen is NOT a healthy render ({r.get('failedChecks')})")
     res = {"useCase": uc["name"], "slug": uc["slug"], "screenshots": shots, "leftUp": True,
-           "integrated": integrated, "mobileCallMatrix": mobile_calls,
+           "integrated": integrated, "mobileCallMatrix": mobile_calls, "demoReview": demo_review,
            "webUrl": V.get("web_url", "http://localhost:3000")}
     state.write(S, uc["slug"], "demo", res)
     # Boot-2 gate: the integrated mobile apps MUST have compiled. buildExit is set per platform
@@ -341,11 +371,18 @@ def stage_demo(S, uc):
 
 
 def stage_teardown(S, uc):
-    """Cleanly close the demo — docker down -v, uninstall mobile apps, shut sims/emulator."""
+    """Cleanly close the demo — docker down -v, uninstall THIS use case's apps + any stale prior-UC
+    apps, shut sims/emulator."""
     repo = state.repo_dir(S, uc["slug"])
     td = verify.compose_down(repo) if (repo / "docker-compose.yml").exists() else {"dockerCleanupDone": True}
-    md = mobile.teardown_mobile("com.mkt.mobile", "com.mkt.mobile")  # bundle/pkg from app.json
-    res = {"dockerCleanupDone": td.get("dockerCleanupDone"), "mobileTornDown": md}
+    # resolve the actual app package(s) for this use case (not the mkt-hardcoded default)
+    pkg = None
+    for c in prompts.expand_components(uc):
+        if c["kind"] in ("mobile", "app", "android", "ios"):
+            pkg = providers.resolve_app_id(c["kind"], repo / c["dir"]) or pkg
+    stale = mobile.clean_stale_apps(keep_pkg=None)   # also sweep leftover prior-UC apps off the emulator
+    md = mobile.teardown_mobile(ios_bundle=pkg, android_pkg=pkg)
+    res = {"dockerCleanupDone": td.get("dockerCleanupDone"), "mobileTornDown": md, "staleAppsRemoved": stale}
     state.write(S, uc["slug"], "teardown", res)
     print(f"OK teardown:{uc['slug']} — docker down, sims/emulator shut, apps uninstalled")
     return res
