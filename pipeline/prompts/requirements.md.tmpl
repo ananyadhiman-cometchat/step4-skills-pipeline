@@ -18,6 +18,12 @@ Produce a single markdown spec with these sections (concise, concrete, no fluff)
      `{{"data":[...], "pagination":{{"page","limit","total"}}}}`. Detail: `GET /api/<resource>/{{id}}` → the bare object.
    - Errors: non-2xx → `{{"detail":"<message>"}}` (FastAPI-style), correct HTTP status (401 unauth, 403 forbidden, 404, 422 validation).
    - Money/decimals serialize as JSON STRINGS; timestamps as ISO-8601 UTC. UIDs prefixed "{slug}-".
+   - **CLIENT API_URL convention (all platforms): API_URL is the scheme://host:port BASE with NO path.**
+     The client appends the full route itself (`{{API_URL}}/api/auth/login`). NEVER bake `/api` into API_URL —
+     a base ending in /api yields a fatal double `/api/api/...` 404. For web served behind the nginx `/api`
+     proxy, API_URL is EMPTY so calls are relative (`/api/...`). Flutter clients read this at runtime from a
+     bundled `.env` asset via flutter_dotenv (declare `- .env` under assets) OR from `--dart-define` — pick ONE
+     and the app must fall back to the emulator host default (`http://10.0.2.2:8080`) if unset.
    Document the use-case-specific resources on top of this shared skeleton — same shapes, different nouns.
 6. Namespaced seed — ~4-6 users, UIDs prefixed "{slug}-", one per role. Seed/test emails MUST use a
    real, non-reserved domain (e.g. user@{slug}.io). Do NOT use .test/.example/.invalid/.local/.localhost —
@@ -26,8 +32,15 @@ Produce a single markdown spec with these sections (concise, concrete, no fluff)
    ALL use cases): email `chat-a@{slug}.io` uid `{slug}-cha-001`, and `chat-b@{slug}.io` uid `{slug}-chb-001`,
    both ordinary users, password = the shared seed password. They must be able to open a 1:1 conversation.
 7. Screen/component map per platform (web + mobile/native). Every client's LOGIN screen MUST expose the
-   stable testIDs `email-input`, `password-input`, `login-submit` (web: data-testid; RN: testID; Flutter:
-   Key/Semantics; native: accessibility id) so the automated login flow is stack-independent.
+   stable testIDs `email-input`, `password-input`, `login-submit` so the automated login flow is
+   stack-independent (web: `data-testid`; RN: `testID`; native: accessibility id). **Flutter: wrap each
+   in `Semantics(identifier: 'email-input', …)` — Maestro matches the accessibility `identifier`, NOT the
+   Flutter `Key` (a Key is invisible to the a11y/automation tree).** Demo-account quick-fill buttons MUST
+   carry visible text labels for their role (`Admin`/`Moderator`/`Member`/`Guest`) so the harness can tap
+   a role by text and never needs to type a password. **Flutter WEB is CanvasKit-only (the `--web-renderer
+   html` flag was removed in 3.44) so there is no real DOM** — call `SemanticsBinding.instance.ensureSemantics()`
+   (or add a top-level `Semantics` wrapper) at startup so Flutter emits its accessibility DOM (`flt-semantics`
+   tree with `aria-label`/`flt-semantics-identifier`), which is what web automation queries to drive login.
 
 Save the finished spec to the file requirements/{slug}.md in the current directory (create it).
 Output only a one-line confirmation after saving.

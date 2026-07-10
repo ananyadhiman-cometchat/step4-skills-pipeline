@@ -237,10 +237,58 @@ def stage_build(S, uc):
     print(f"OK build:{uc['slug']} sha={sha[:9]}"); return res
 
 
+WEBDRIVER = HERE / "e2e" / "webdriver"           # standalone Playwright (Flutter web has no @playwright/test)
+PW_BROWSERS = os.path.expanduser("~/Library/Caches/ms-playwright")
+
+
+def _web_login_shot_flutter(out_png, role="Member", submit="Sign In") -> bool:
+    """LOGGED-IN web shot for a Flutter (CanvasKit) app. Flutter web has no real DOM (the --web-renderer
+    html flag was removed in 3.44), so we drive login through the accessibility (flt-semantics) tree the
+    app emits via SemanticsBinding.ensureSemantics(): tap the demo-role button, submit, wait for the login
+    copy to disappear, screenshot the home. Proves web→backend connectivity (the root shot only proves it
+    serves the login screen). Uses the shared pipeline Playwright in e2e/webdriver."""
+    driver = WEBDRIVER / "flutter_login_shot.mjs"
+    if not driver.exists():
+        return False
+    if not (WEBDRIVER / "node_modules").exists():   # self-bootstrap the shared Playwright (once)
+        print("  installing shared Playwright for web-login driver…")
+        subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=str(WEBDRIVER),
+                       env={**os.environ, "PLAYWRIGHT_BROWSERS_PATH": PW_BROWSERS},
+                       capture_output=True, timeout=300)
+        subprocess.run(["npx", "--yes", "playwright", "install", "chromium"], cwd=str(WEBDRIVER),
+                       env={**os.environ, "PLAYWRIGHT_BROWSERS_PATH": PW_BROWSERS},
+                       capture_output=True, timeout=600)
+        if not (WEBDRIVER / "node_modules").exists():
+            return False
+    env = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": PW_BROWSERS,
+           "URL": "http://localhost:3000/", "ROLE": role, "SUBMIT": submit, "OUT": str(out_png)}
+    p = subprocess.run(["node", str(driver)], cwd=str(WEBDRIVER), text=True,
+                       capture_output=True, timeout=120, env=env)
+    print(f"  web login→home (semantics): {p.stdout.strip()[-160:] or p.stderr.strip()[-160:]}")
+    return p.returncode == 0 and Path(out_png).exists()
+
+
 def _web_shot(repo, out_png) -> bool:
-    """Screenshot the served web app (root; whatever renders — login or home)."""
+    """Screenshot the served web app ROOT (login screen for auth-gated apps). The LOGGED-IN home is a
+    separate shot (_web_login_shot_flutter). Node web (repo/web) uses its own @playwright/test; a Flutter
+    (or any repo/web-less) app uses the shared pipeline Playwright in e2e/webdriver."""
     web = repo / "web"
     if not web.exists():
+        # Flutter / repo/web-less: plain root shot via the shared driver
+        if (WEBDRIVER / "node_modules").exists():
+            driver = WEBDRIVER / "root_shot.mjs"
+            driver.write_text(
+                "import { chromium } from 'playwright'\n"
+                "const b = await chromium.launch()\n"
+                "const p = await b.newPage({ viewport:{width:1280,height:900} })\n"
+                "await p.goto('http://localhost:3000/', { waitUntil:'load' }).catch(()=>{})\n"
+                "await p.waitForTimeout(4000)\n"
+                f"await p.screenshot({{ path:'{out_png}' }})\n"
+                "await b.close()\n")
+            env = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": PW_BROWSERS}
+            code = subprocess.run(["node", str(driver)], cwd=str(WEBDRIVER), env=env,
+                                  capture_output=True, timeout=120).returncode
+            return code == 0 and Path(out_png).exists()
         return False
     script = web / "_shot.mjs"
     script.write_text(
@@ -277,21 +325,27 @@ def stage_demo(S, uc):
             die_gate(f"demo:{uc['slug']} boot-2 must be on feature/cometchat-integration, on '{branch}' tag=agent")
     shots = {}
     # 1. web + backend via docker — leave up
+    is_flutter_web = (repo / "app" / "pubspec.yaml").exists() and not (repo / "web").exists()
     if (repo / "docker-compose.yml").exists():
-        if (repo / "app" / "pubspec.yaml").exists():   # Flutter web served static — host-build first
-            providers.host_build_flutter_web(repo / "app")
+        if is_flutter_web:   # Flutter web served static — host-build first (empty API_URL → nginx /api proxy)
+            providers.host_build_flutter_web(repo / "app", env_file=str(ENV_FILE))
         up, _ = verify.compose_up(repo)
         hpaths = V.get("backend_health_paths") or ["/health"]
         verify.health_check(V.get("backend_url", "http://localhost:8080"), hpaths, V["backend_health_timeout_s"])
-        if "web" in kinds or (repo / "app" / "pubspec.yaml").exists():   # Node web OR Flutter web
+        if "web" in kinds or is_flutter_web:   # Node web OR Flutter web
             p = str(demo / "web.png")
             shots["web"] = {"ok": _web_shot(repo, p), "path": p}
+            if is_flutter_web:   # ALSO drive login via the semantics tree → logged-in home (connectivity proof)
+                lp = str(demo / "web-loggedin.png")
+                shots["web-loggedin"] = {"ok": _web_login_shot_flutter(lp), "path": lp}
     # 2. mobile / native clients — dispatch to the STACK PROVIDER per component (RN / Flutter /
     #    native Android / native iOS). Each provider self-heals (cleartext + creds), builds, installs,
     #    launches and screenshots — the demo stage is no longer RN-only.
     mobile_calls = {}; plat_app_id = {}
-    api_a = V.get("api_android", "http://10.0.2.2:8080/api")   # android emulator → host
-    api_i = V.get("api_ios", "http://localhost:8080/api")      # ios simulator → localhost
+    # API_URL is the scheme://host:port BASE with NO path — the app appends the full route (…/api/…).
+    # A base ending in /api double-prefixes → fatal /api/api/... 404. RN inlines its own EXPO_PUBLIC_API_URL.
+    api_a = V.get("api_android", "http://10.0.2.2:8080")   # android emulator → host
+    api_i = V.get("api_ios", "http://localhost:8080")      # ios simulator → localhost
     for c in prompts.expand_components(uc):
         if c["kind"] not in ("mobile", "app", "android", "ios"):
             continue
@@ -302,7 +356,7 @@ def stage_demo(S, uc):
         print(f"demo provider [{prov.family}] for {c['name']} ({c['stack']})…")
         ctx = {"app_dir": repo / c["dir"], "repo_dir": repo, "demo_dir": demo,
                "kind": c["kind"], "stack": c["stack"], "api_android": api_a, "api_ios": api_i,
-               "api_web": "/api", "integrated": integrated, "env_file": str(ENV_FILE), "settings": S}
+               "api_web": "", "integrated": integrated, "env_file": str(ENV_FILE), "settings": S}
         aid = providers.resolve_app_id(c["kind"], repo / c["dir"])
         for plat, shot in prov.demo(ctx).items():   # android / ios / web
             shots[plat] = shot

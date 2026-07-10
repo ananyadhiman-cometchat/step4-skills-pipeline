@@ -36,6 +36,39 @@ def _guards(ctx: dict):
     return g
 
 
+def write_flutter_env(app: Path, api_url: str, env_file: str = "") -> None:
+    """Write the app's runtime `.env` asset (flutter_dotenv) with API_URL (+ real CometChat creds) and
+    guarantee it's a declared asset. Flutter apps split into two config conventions and we cover both:
+    apps that read `dotenv.env['API_URL']` need this bundled `.env`; apps that read `--dart-define` get
+    the value from the build flag. Passing only one leaves the other convention on its build-time default
+    (→ the app dials the wrong host and every call fails as a generic 'Connection error').
+    API_URL is the scheme://host:port BASE with NO path — the app appends the full route (…/api/…),
+    so a base that already ends in /api produces a fatal double `/api/api/...` 404."""
+    app = Path(app)
+    lines = {"API_URL": api_url.rstrip("/"), "ENABLE_DEMO_LOGINS": "true"}
+    if env_file and os.path.exists(os.path.expanduser(env_file)):
+        try:
+            from lib import cometchat
+            cfg = cometchat._cfg(env_file)
+            for k in ("COMETCHAT_APP_ID", "COMETCHAT_REGION", "COMETCHAT_AUTH_KEY"):
+                if cfg.get(k):
+                    lines[k] = cfg[k]
+        except Exception:
+            pass
+    (app / ".env").write_text("".join(f"{k}={v}\n" for k, v in lines.items()))
+    # ensure `.env` is a bundled asset (flutter_dotenv loads it via rootBundle at runtime)
+    pub = app / "pubspec.yaml"
+    if pub.exists():
+        t = pub.read_text()
+        if "- .env" not in t:
+            import re as _re
+            nt = _re.sub(r"(\n\s*assets:\s*\n)", r"\1    - .env\n", t, count=1)
+            if nt == t and "\nflutter:" in t:                       # no assets: block yet → add one
+                nt = t.replace("\nflutter:", "\nflutter:\n  assets:\n    - .env", 1)
+            if nt != t:
+                pub.write_text(nt)
+
+
 # ---------------- React Native (UC1/4/9) — delegates to the proven mobile.py ----------------
 class RNProvider:
     family = "rn"; platforms = ["android", "ios"]
@@ -75,8 +108,10 @@ class FlutterProvider:
         _sh("flutter pub get", cwd=str(app), timeout=600)
         dd = app / ".dart_define.json"
         defs = f"--dart-define-from-file={dd}" if dd.exists() else ""
-        # Android — apk with API_URL for the emulator→host route
+        # Android — apk with API_URL for the emulator→host route. Write BOTH the .env asset (dotenv apps)
+        # and pass --dart-define (dart-define apps); either convention now points at the real backend.
         if mobile.boot_android():
+            write_flutter_env(app, ctx["api_android"], ctx.get("env_file", ""))
             code, o = _sh(f'export JAVA_HOME="{mobile.JDK17}"; export ANDROID_HOME="{mobile.SDK}"; '
                           f'flutter build apk --release --dart-define=API_URL={ctx["api_android"]} {defs}', cwd=str(app))
             apk = next(iter((app / "build/app/outputs/flutter-apk").glob("app-release.apk")), None) if code == 0 else None
@@ -87,6 +122,7 @@ class FlutterProvider:
             out["android"] = {"ok": ok, "path": p, "buildExit": code, "appId": and_id, "tail": mobile._tail(o)}
         # iOS — simulator .app (no codesign) → install via simctl. iOS bundle id ≠ android applicationId.
         mobile.boot_ios()
+        write_flutter_env(app, ctx["api_ios"], ctx.get("env_file", ""))
         code, o = _sh(f'{mobile.UTF8}; flutter build ios --simulator --debug '
                       f'--dart-define=API_URL={ctx["api_ios"]} {defs}', cwd=str(app))
         appbin = next(iter((app / "build/ios/iphonesimulator").glob("*.app")), None) if code == 0 else None
@@ -95,8 +131,11 @@ class FlutterProvider:
         if appbin:
             ok = mobile.install_launch_shot_ios(str(appbin), p, bundle=ios_bundle)
         out["ios"] = {"ok": ok, "path": p, "buildExit": code, "appId": ios_bundle, "tail": mobile._tail(o)}
-        # Web — static build; the boot/containerize stage serves build/web on :3000
-        code, o = _sh(f'flutter build web --dart-define=API_URL={ctx.get("api_web","/api")} {defs}', cwd=str(app))
+        # Web — static build; the boot/containerize stage serves build/web on :3000. API_URL is EMPTY so
+        # the app's relative fetch (`${API_URL}/api/...` → `/api/...`) is proxied by nginx to the backend.
+        web_api = ctx.get("api_web", "")
+        write_flutter_env(app, web_api, ctx.get("env_file", ""))
+        code, o = _sh(f'flutter build web --dart-define=API_URL={web_api} {defs}', cwd=str(app))
         out["web"] = {"ok": code == 0, "buildExit": code, "built": str(app / "build/web"), "tail": mobile._tail(o)}
         mobile.cleanup_build_artifacts(app)
         return out
@@ -143,14 +182,18 @@ _REGISTRY = {"rn": RNProvider, "flutter": FlutterProvider,
              "android-native": AndroidNativeProvider, "ios-native": IOSNativeProvider}
 
 
-def host_build_flutter_web(app_dir, api_url: str = "http://localhost:8080") -> dict:
+def host_build_flutter_web(app_dir, api_url: str = "", env_file: str = "") -> dict:
     """Build Flutter web on the HOST (the validated Flutter version) so the web Dockerfile can serve
     the static `build/web` via nginx — no Flutter-version drift between validation and the container.
-    Call before compose_up for any Flutter use case. Idempotent (ensures the web platform first)."""
+    Call before compose_up for any Flutter use case. Idempotent (ensures the web platform first).
+    API_URL defaults to EMPTY so the served app's fetches are relative (`/api/...`) and nginx proxies
+    them to the backend — an absolute http://localhost:8080 would break in the browser (CORS / wrong
+    origin). Writes the .env asset too (this app reads flutter_dotenv, not --dart-define)."""
     app_dir = Path(app_dir)
     if not (app_dir / "pubspec.yaml").exists():
         return {"ok": False, "note": "not a flutter app"}
     _sh("flutter create . --platforms=web", cwd=str(app_dir), timeout=300)
+    write_flutter_env(app_dir, api_url, env_file)
     code, out = _sh(f"flutter build web --release --dart-define=API_URL={api_url}", cwd=str(app_dir), timeout=900)
     return {"ok": code == 0 and (app_dir / "build/web/index.html").exists(),
             "exitCode": code, "tail": mobile._tail(out)}

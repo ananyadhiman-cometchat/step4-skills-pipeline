@@ -68,8 +68,33 @@ def _fix_cleartext(ctx) -> tuple[bool, str]:
         man = app / "android/app/src/main/AndroidManifest.xml"
         if man.exists():
             t = man.read_text()
+            # (1) INTERNET permission — THE release-only blocker. Flutter only injects INTERNET into the
+            # DEBUG manifest (for hot-reload), so a `flutter build apk --release` ships with NO network
+            # access → every HTTP call fails as a generic "Connection error". Add it to the MAIN manifest.
+            if "android.permission.INTERNET" not in t:
+                nt = re.sub(r"(<manifest\b[^>]*>)",
+                            r'\1\n    <uses-permission android:name="android.permission.INTERNET"/>', t, count=1)
+                if nt != t:
+                    t = nt; done.append("INTERNET permission")
+            # (2) cleartext: usesCleartextTraffic on <application> can be overridden by the platform's
+            # default network-security-config on some images, so ALSO ship an explicit config that permits
+            # cleartext and reference it. Belt-and-suspenders for local HTTP backends in release builds.
             if "usesCleartextTraffic" not in t:
-                man.write_text(t.replace("<application ", '<application android:usesCleartextTraffic="true" ', 1)); done.append("android manifest")
+                nt = re.sub(r"<application\b", '<application android:usesCleartextTraffic="true"', t, count=1)
+                if nt != t:
+                    t = nt; done.append("usesCleartextTraffic")
+            if "networkSecurityConfig" not in t:
+                nsc = app / "android/app/src/main/res/xml/network_security_config.xml"
+                nsc.parent.mkdir(parents=True, exist_ok=True)
+                nsc.write_text('<?xml version="1.0" encoding="utf-8"?>\n<network-security-config>\n'
+                               '    <base-config cleartextTrafficPermitted="true">\n'
+                               '        <trust-anchors><certificates src="system" /></trust-anchors>\n'
+                               '    </base-config>\n</network-security-config>\n')
+                nt = re.sub(r"<application\b",
+                            '<application android:networkSecurityConfig="@xml/network_security_config"', t, count=1)
+                if nt != t:
+                    t = nt; done.append("networkSecurityConfig")
+            man.write_text(t)
         for plist in app.glob("ios/Runner/Info.plist"):
             pb = "/usr/libexec/PlistBuddy"
             subprocess.run([pb, "-c", "Add :NSAppTransportSecurity dict", str(plist)], capture_output=True)

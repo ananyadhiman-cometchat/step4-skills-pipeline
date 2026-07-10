@@ -10,10 +10,12 @@ STATE="$ROOT/pipeline-state"
 
 stages=(preflight provision-app build boot push-main integrate verify push-branch)
 
+BAR="════════════════════════════════════════════════════════════"
 while true; do
   clear
-  printf "\033[1m STEP4 · %s · live\033[0m   %s\n" "$SLUG" "$(date '+%H:%M:%S')"
-  printf -- "------------------------------------------------------------\n"
+  printf "\033[1;36m╔%s╗\033[0m\n" "$BAR"
+  printf "\033[1;36m║\033[0m \033[1mSTEP4 pipeline · %-14s\033[0m %35s \033[1;36m║\033[0m\n" "$SLUG" "$(date '+%a %H:%M:%S')"
+  printf "\033[1;36m╚%s╝\033[0m\n\n" "$BAR"
 
   # infer the running stage: first stage with no ledger json yet whose work is in progress
   running=""
@@ -22,18 +24,17 @@ while true; do
   elif [ -f "$STATE/$SLUG-boot.json" ] && [ ! -f "$STATE/$SLUG-integrate.json" ]; then running="integrate?"
   fi
 
-  # stage ledger: green=done, yellow=running now, grey=pending
-  printf " stages: "
+  # stage ledger as a clean vertical checklist: ✔ done · ▶ running · ○ pending
+  printf " \033[1mStages\033[0m\n"
   for s in "${stages[@]}"; do
-    if [ -f "$STATE/$SLUG-$s.json" ]; then printf "\033[32m%s\033[0m " "$s"
-    elif [ "$s" = "$running" ]; then printf "\033[33m%s◀running\033[0m " "$s"
-    else printf "\033[90m%s\033[0m " "$s"; fi
+    if [ -f "$STATE/$SLUG-$s.json" ]; then printf "   \033[32m✔ %s\033[0m\n" "$s"
+    elif [ "$s" = "$running" ]; then printf "   \033[33m▶ %s  (running — ledger writes on completion)\033[0m\n" "$s"
+    else printf "   \033[90m○ %s\033[0m\n" "$s"; fi
   done
-  printf "\n"
-  [ -n "$running" ] && printf " \033[33m▶ %s in progress (ledger writes on completion)\033[0m\n" "$running"
   printf "\n"
 
   # per-component file growth (the live pulse)
+  printf " \033[1mComponents\033[0m  \033[90m(file growth = live codegen pulse)\033[0m\n"
   for d in backend web mobile ios android app; do
     [ -d "$RUN/$d" ] || continue
     n=$(find "$RUN/$d" -type f -not -path '*/node_modules/*' -not -path '*/.venv/*' -not -path '*/.git/*' 2>/dev/null | wc -l | tr -d ' ')
@@ -47,10 +48,10 @@ while true; do
 
   # active codegen
   procs=$(ps aux | grep -c "[c]laude -p")
-  printf "\n  codegen procs: %s\n" "$procs"
+  printf "    \033[90mcodegen procs: %s\033[0m\n" "$procs"
 
   # docker: live container + build activity (boot / verify stages)
-  printf "\n  \033[1mdocker\033[0m\n"
+  printf "\n \033[1mDocker\033[0m\n"
   containers=$(docker ps -a --format '{{.Names}}|{{.Status}}' 2>/dev/null | grep -i "$SLUG")
   if [ -n "$containers" ]; then
     echo "$containers" | while IFS='|' read -r n s; do
@@ -75,7 +76,7 @@ while true; do
   latest=$(ls -t "$STATE/$SLUG-"*.json 2>/dev/null | head -1)
   [ -n "$latest" ] && printf "  last ledger write: %s\n" "$(basename "$latest")"
 
-  printf -- "------------------------------------------------------------\n"
-  printf " Ctrl-C to stop · refreshes 4s\n"
+  printf "\n\033[90m╌%s╌\033[0m\n" "$BAR"
+  printf " \033[90mCtrl-C to stop · refreshes every 4s\033[0m\n"
   sleep 4
 done
