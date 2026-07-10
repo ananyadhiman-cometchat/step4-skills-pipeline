@@ -27,3 +27,9 @@
 - **[skills] Flutter login testIDs use widget Key(), which Maestro can't see.** login-shot now logs in
   via the demo-account BUTTON (visible text). The build prompt should mandate Semantics(identifier:)
   for Flutter login fields (not just Key) so testID-based automation works.
+- **[containerize/provider] Flutter web API_URL must reach the backend.** web built with API_URL=/api
+  (relative) but nginx on :3000 doesn't proxy /api → login 404s. Fix: build web with the absolute host
+  backend URL (http://localhost:8080/api) OR add an nginx /api→backend:8000 proxy in the web Dockerfile.
+- **[automation] Maestro login-shot on Flutter timing** — demo-chip fill + immediate Sign In tap can
+  race; android/ios login-shot needs a settle between the chip tap and submit. Backend login itself
+  works (verified via API after the JWT fix).
