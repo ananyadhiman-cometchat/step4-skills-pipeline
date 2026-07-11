@@ -747,15 +747,6 @@ def stage_push_branch(S, uc):
     print(f"{'OK' if code==0 else 'WARN'} push-branch:{uc['slug']} — use case complete"); return res
 
 
-def _parse_judge(text: str) -> dict:
-    import re
-    m = re.search(r"\{.*\}", text, re.S)
-    try:
-        return json.loads(m.group(0)) if m else {}
-    except Exception:
-        return {}
-
-
 STAGES = {"preflight": stage_preflight, "provision-app": stage_provision,
           "build": stage_build, "containerize": stage_containerize, "boot": stage_boot,
           "demo": stage_demo, "teardown": stage_teardown,

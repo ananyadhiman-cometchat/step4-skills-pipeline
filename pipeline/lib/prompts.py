@@ -84,5 +84,7 @@ def render_integrate(settings, uc: dict, comp: dict) -> str:
         gaps_file=f"pipeline-state/gaps/{uc['slug']}.md", vue_note=vue_note)
 
 
-def render_judge(settings, uc: dict, evidence: str) -> str:
-    return _tmpl("judge.md.tmpl").format(name=uc["name"], slug=uc["slug"], evidence=evidence)
+# NOTE: the adversarial LLM judge was removed. The verify verdict is now a DETERMINISTIC scorecard of
+# cross-party machine evidence (cross-party receive + two-party call + real SDK-init + vision), not an
+# LLM opinion. render_judge / judge.md.tmpl / _parse_judge (all previously dead code with zero callers)
+# were deleted so the code no longer implies a second, non-existent LLM verifier runs.

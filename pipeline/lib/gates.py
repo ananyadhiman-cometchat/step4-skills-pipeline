@@ -44,7 +44,8 @@ def integrated_up(v: dict) -> bool:
 
 
 def verify(v: dict) -> bool:
-    # GATE.verify: integrated system up AND adversarial refute failed to disprove it
+    # GATE.verify: integrated system up AND the DETERMINISTIC scorecard did not refute it
+    # (refuted = not(sdkInit and cross-party-receive and two-party-call); + vision teeth). No LLM judge.
     return integrated_up(v) and v.get("refuted") is False
 
 
