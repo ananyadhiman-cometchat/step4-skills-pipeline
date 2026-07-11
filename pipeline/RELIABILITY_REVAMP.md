@@ -67,6 +67,23 @@ evidence**.
 - The dead LLM-judge scaffolding (`render_judge`, `_parse_judge`, `judge.md.tmpl`) + the docs that
   claimed it ran.
 
+## Test-account model (root-cause fix)
+The chat/call test parties were a fixed `chat-a`/`chat-b` pair that each app's **baseline seed** had to
+include (mandated in the requirements template). That coupled a CometChat-testing concern into the
+no-CometChat baseline and depended on every app's codegen matching a contract pinned-once and never
+reconciled — so `com` (spec frozen before the mandate) silently shipped without them, and its `verify`
+login would 401.
+
+Fix: the harness now tests between the app's **own existing demo accounts**. Name two in
+`use_cases.json` (`"chatPair": [emailA, emailB]`); `verify`/`demo` **discover their CometChat uid from
+the app's login response** (`cometchat.app_login`), ensure both exist in CometChat, and seed a
+conversation between them (`cometchat.seed_and_resolve_pair`). No baseline `chat-a`/`chat-b` dependency,
+no drift, no rebuild — the e2e login is unchanged (email/password), and the mobile call's server-answered
+poll uses the resolved caller uid (not the stale default). Unconfigured use cases fall back to the legacy
+fixed pair; a resolve/seed failure now stops with `tag=setup`, not `skills`. (The Flutter semantics login
+driver was also validated + fixed live: target the enabled input, wait for Flutter to attach the editable,
+verify-and-retry the typed value, Enter-to-submit.)
+
 ## Deferred (intentionally not in this branch)
 - **Per-slug port offsets** for true concurrent lanes (needs the generated compose to read ports from
   env). Today: use cases still run sequentially on `:8080`/`:3000`; the compose builder-prune scoping

@@ -150,6 +150,51 @@ def call_test_accounts(slug: str) -> dict:
             "web":    (f"chat-b@{slug}.io", f"{slug}-chb-001", "Chat B")}
 
 
+def app_login(backend_url: str, email: str, password: str) -> dict:
+    """Log into the APP backend to DISCOVER a user's CometChat uid — the login response carries
+    `user.uid` (the CometChat identity the app maps this account to). Lets the harness test chat/call
+    between the app's OWN existing demo accounts instead of a special chat-a/chat-b pair that has to be
+    separately seeded (and drifts). Returns {email, uid, name, role} (uid None on failure)."""
+    body = json.dumps({"email": email, "password": password}).encode()
+    req = urllib.request.Request(backend_url.rstrip("/") + "/api/auth/login", data=body,
+                                 headers={"Content-Type": "application/json", "Accept": "application/json"},
+                                 method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            d = json.loads(r.read() or b"{}")
+        u = d.get("user", {}) or {}
+        return {"email": email, "uid": u.get("uid"), "name": u.get("name"), "role": u.get("role")}
+    except Exception as e:
+        return {"email": email, "uid": None, "error": str(e)[:140]}
+
+
+def seed_and_resolve_pair(env_file: str, uc: dict, backend_url: str, password: str) -> dict:
+    """Resolve the two chat-test parties from the app's OWN demo accounts (uc['chatPair'] = two seeded
+    emails), discover their CometChat uid via app login, ensure both exist in CometChat, and seed a
+    conversation between them. This decouples verification from the baseline seed (no chat-a/chat-b
+    dependency, no drift). Returns {web:(email,uid,name), mobile:(email,uid,name), ok, mode}.
+    Falls back to the legacy fixed chat-a/chat-b pair only when no chatPair is configured."""
+    cfg = _cfg(env_file)
+    pair = uc.get("chatPair")
+    if pair and len(pair) >= 2:
+        a = app_login(backend_url, pair[0], password)   # web / receiver
+        b = app_login(backend_url, pair[1], password)   # mobile / sender
+        if a.get("uid") and b.get("uid"):
+            # ensure both exist in CometChat (idempotent) + seed a message so a conversation exists
+            create_user(cfg, a["uid"], a.get("name") or a["email"], [f"uc:{uc['slug']}", "role:calltest"])
+            create_user(cfg, b["uid"], b.get("name") or b["email"], [f"uc:{uc['slug']}", "role:calltest"])
+            sm = send_message(cfg, b["uid"], a["uid"], "Hi! (automated call-test seed)")
+            return {"web": (a["email"], a["uid"], a.get("name")),
+                    "mobile": (b["email"], b["uid"], b.get("name")),
+                    "ok": sm in (200, 201), "mode": "app-demo-accounts", "logins": {"a": a, "b": b}}
+        return {"web": (pair[0], a.get("uid"), None), "mobile": (pair[1], b.get("uid"), None),
+                "ok": False, "mode": "app-demo-accounts", "loginError": {"a": a, "b": b}}
+    # legacy: no chatPair configured → fixed chat-a/chat-b (requires the app to have seeded them)
+    r = seed_conversation(env_file, uc["slug"])
+    acc = call_test_accounts(uc["slug"])
+    return {"web": acc["web"], "mobile": acc["mobile"], "ok": r.get("ok"), "mode": "fixed-chat-ab"}
+
+
 def seed_conversation(env_file, slug) -> dict:
     """Seed the two call-test users + a message between them → a real conversation to test. Uses the
     per-UC call_test_accounts so this works for ANY use case, not just the mkt buyer/seller pair."""

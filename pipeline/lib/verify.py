@@ -272,7 +272,8 @@ def run_twoparty_web(repo_dir: Path, web_url: str, shot_dir: str,
 def run_twoparty_mobile(platform: str, call_type: str, web_url: str, shot_dir: str,
                         env_file: str = "", slug: str = "mkt", retries: int = 2,
                         app_id: str | None = None, mobile_email: str | None = None,
-                        web_email: str | None = None, password: str | None = None) -> dict:
+                        web_email: str | None = None, password: str | None = None,
+                        caller_uid: str | None = None) -> dict:
     """Automated mobile↔web call leg (android↔web / ios↔web). Maestro drives the native app, the web
     peer rings it; the leg passes on the SIGNALING verdict — the mobile incoming widget appeared +
     Maestro accepted + CometChat logged the call ANSWERED (server-side, media-independent). Retries
@@ -286,6 +287,7 @@ def run_twoparty_mobile(platform: str, call_type: str, web_url: str, shot_dir: s
     if mobile_email: extra += ["--mobile-email", mobile_email]
     if web_email:    extra += ["--web-email", web_email]
     if password:     extra += ["--password", password]
+    if caller_uid:   extra += ["--caller-uid", caller_uid]
     last = {"error": "no run", "callConnected": False}
     for a in range(retries):
         code, out = _run(["python3", str(script), "--platform", platform, "--direction", "web-calls-mobile",

@@ -401,7 +401,14 @@ def stage_demo(S, uc):
                 plat_app_id[plat] = shot.get("appId") or aid
     # LOGIN + screenshot the logged-in home for each mobile client that launched OK — proves the app
     # reaches the backend (connectivity), which the launch screen alone doesn't. Uses a seeded account.
-    li_acc = cometchat.call_test_accounts(uc["slug"]); li_email = li_acc["mobile"][0]
+    # resolve the chat-test pair from the app's OWN demo accounts (chatPair) when configured — same
+    # source of truth as verify, so mobile login/call use accounts the app actually seeded.
+    if uc.get("chatPair"):
+        _rp = cometchat.seed_and_resolve_pair(str(ENV_FILE), uc, V.get("backend_url", "http://localhost:8080"), e2e_password(uc))
+        acc_pair = _rp if (_rp.get("web") and _rp["web"][1]) else cometchat.call_test_accounts(uc["slug"])
+    else:
+        acc_pair = cometchat.call_test_accounts(uc["slug"])
+    li_acc = acc_pair; li_email = li_acc["mobile"][0]
     li_pw = e2e_password(uc)
     for plat in ("android", "ios"):
         if shots.get(plat, {}).get("ok") and plat_app_id.get(plat):
@@ -416,7 +423,7 @@ def stage_demo(S, uc):
     # Parameterized per use case: the app id + the two call-test accounts (not mkt-hardcoded).
     if integrated:
         web_url = V.get("web_url", "http://localhost:3000")
-        acc = cometchat.call_test_accounts(uc["slug"])
+        acc = acc_pair
         m_email, w_email = acc["mobile"][0], acc["web"][0]
         pw = e2e_password(uc)
         for plat in ("android", "ios"):
@@ -425,7 +432,7 @@ def stage_demo(S, uc):
                     r = verify.run_twoparty_mobile(plat, ct, web_url, str(demo),
                                                    env_file=str(ENV_FILE), slug=uc["slug"],
                                                    app_id=plat_app_id.get(plat), mobile_email=m_email,
-                                                   web_email=w_email, password=pw)
+                                                   web_email=w_email, password=pw, caller_uid=acc["web"][1])
                     mobile_calls[f"{plat}-{ct}"] = bool(r.get("callConnected"))
                     print(f"  call-matrix {plat}↔web {ct}: connected={r.get('callConnected')}")
     print(f"  disk free: {mobile.disk_free_gb()}GB")
@@ -624,9 +631,7 @@ def stage_verify(S, uc):
     repo = state.repo_dir(S, uc["slug"]); V = S["verify"]
     web_url = V.get("web_url", "http://localhost:3000")
     (repo / "_demo").mkdir(exist_ok=True); demo_dir = str(repo / "_demo")
-    # STEP 1 — seed the two call-test users + a conversation between them
-    seed = cometchat.seed_conversation(str(ENV_FILE), uc["slug"])
-    # STEP 2 — re-boot the integrated system; health-check BOTH backend AND web (web was never checked)
+    # STEP 1 — re-boot the integrated system; health-check BOTH backend AND web (web was never checked)
     hpaths = V.get("backend_health_paths") or [V.get("backend_health_path", "/health")]
     dockerUp, boot_tail = (verify.compose_up(repo) if (repo / "docker-compose.yml").exists() else (False, "no compose"))
     backend_ok, _ = verify.health_check(V.get("backend_url", "http://localhost:8080"), hpaths,
@@ -643,10 +648,21 @@ def stage_verify(S, uc):
                   f"verify:{uc['slug']} integrated system did not boot healthy (backend={backend_ok} web={web_ok})",
                   {"dockerUp": dockerUp, "allServicesHealthy": False}, gate="integratedUp",
                   evidence=[str(boot_tail)[:300]])
-    _acc = cometchat.call_test_accounts(uc["slug"])
-    a_email, b_email = _acc["web"][0], _acc["mobile"][0]   # A = receiver, B = sender
-    recv_uid, send_uid = _acc["web"][1], _acc["mobile"][1]
+    # STEP 2 — resolve the two chat-test parties from the app's OWN demo accounts (uc.chatPair),
+    # discover their CometChat uid via app login, and seed a conversation between them. No dependency
+    # on a chat-a/chat-b baseline seed (which drifts) — it uses accounts the app definitely has.
     password = e2e_password(uc)
+    pair = cometchat.seed_and_resolve_pair(str(ENV_FILE), uc, V.get("backend_url", "http://localhost:8080"), password)
+    obs.event(S, uc["slug"], "verify", "chat_pair", mode=pair.get("mode"), ok=pair.get("ok"),
+              web=pair["web"][0], mobile=pair["mobile"][0])
+    if not pair.get("ok"):
+        if dockerUp:
+            verify.compose_down(repo)
+        die_gate(f"verify:{uc['slug']} could not resolve/seed the chat-test pair ({pair.get('mode')}) — "
+                 f"check chatPair emails exist in the app seed: {pair.get('loginError') or 'seed send failed'} tag=setup")
+    seed = {"ok": True}
+    a_email, b_email = pair["web"][0], pair["mobile"][0]   # A = receiver, B = sender
+    recv_uid, send_uid = pair["web"][1], pair["mobile"][1]
     submit = uc.get("e2eSubmit", "Sign In")
     nonce_base = f"rx-{uc['slug']}-{int(time.time())}"
     # The WEB-CLIENT SHAPE picks the e2e path: a Node web/ dir → browser DOM e2e; a Flutter-unified app
