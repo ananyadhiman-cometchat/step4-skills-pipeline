@@ -109,7 +109,10 @@ def ensure_repo(repo: Path) -> None:
     if fresh:
         git(repo, "init", "-q"); git(repo, "checkout", "-q", "-b", "main")
     gi = repo / ".gitignore"
-    if not gi.exists() or "node_modules/" not in gi.read_text():
+    cur = gi.read_text() if gi.exists() else ""
+    # refresh a STALE ignore too (an existing repo created before .dart_define.json/local.properties
+    # were added) so newly-ignored cred files are untracked below — not just fresh-repo creation.
+    if not gi.exists() or "node_modules/" not in cur or ".dart_define.json" not in cur:
         gi.write_text(GITIGNORE)
     if not fresh:  # existing repo — drop any tracked files the .gitignore now ignores
         code, tracked = git(repo, "ls-files", "-ci", "--exclude-standard")
@@ -561,6 +564,8 @@ def stage_integrate(S, uc):
     # green compile over incoherent code). reset+clean keeps the gitignored injected .env/node_modules.
     git(repo, "checkout", "-q", "main"); git(repo, "checkout", "-q", "-B", "feature/cometchat-integration")
     git(repo, "reset", "--hard", "main"); git(repo, "clean", "-fdq")
+    ensure_repo(repo)  # refresh .gitignore on the feature branch so integrate never tracks the cred
+    #                    files self-heal writes (.dart_define.json/local.properties) — untracks any too
     comps, worst, reports = prompts.expand_components(uc), 0, []
     for c in comps:
         cdir = repo / c["dir"]
