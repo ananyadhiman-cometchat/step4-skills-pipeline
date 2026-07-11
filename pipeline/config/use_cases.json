@@ -12,6 +12,6 @@
     { "slug": "rid", "name": "Rideshare",          "repo": "step4-rideshare",         "archetype": "R", "backend": "Node",          "web": "Next.js", "mobile": "React Native (bare)", "skills": ["nextjs-patterns", "native-bare"] },
     { "slug": "evt", "name": "Event platform",     "repo": "step4-event-platform",    "archetype": "N", "backend": "Java (Spring)", "web": "Vue 3", "android": "Android Compose (v6)", "ios": "iOS (Swift)", "skills": ["vue-GAP", "android-v6-compose", "ios"] }
   ],
-  "waves": [["telehealth-redo", "mkt"], ["del", "dat"], ["fin", "cre"], ["fld", "rea"], ["rid", "evt"]],
+  "waves": [["mkt"], ["com", "del"], ["dat", "fin"], ["cre", "fld"], ["rea", "rid"], ["evt"]],
   "_waves_note": "Conductor drives 2 use cases per wave; next wave starts only after both reach push-branch. Edit to match your agreed wave plan."
 }
