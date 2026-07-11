@@ -23,6 +23,14 @@
     "integrate": 120,
     "judge": 12
   },
+  "_stage_timeout_note": "Hard wall-clock cap per claude -p stage (seconds) so a wedged agent can't hang the conductor. Falls back to stage_timeout_default_s.",
+  "stage_timeout_s": {
+    "spec": 1200,
+    "provision": 2400,
+    "build": 2400,
+    "integrate": 3000
+  },
+  "stage_timeout_default_s": 2400,
   "max_retries": 5,
   "bootstrap": {
     "_comment": "Phase-0 idempotent tool installs. preflight runs these if the tool is missing, so the run is self-provisioning.",
@@ -68,7 +76,11 @@
     "e2e_note": "Commands run in the repo/component dir. The build/integrate LLM authors the actual specs (e2e/*.spec.ts, e2e/*.flow.yaml). Empty = recorded not-configured. Install: npm i -D @playwright/test && npx playwright install; brew install maestro.",
     "backend_url": "http://localhost:8080",
     "web_url": "http://localhost:3000",
-    "vision_review": true
+    "vision_review": true,
+    "_vision_gate_note": "When true, a Claude-vision FAIL on a call-critical rubric (ongoing/incoming) refutes the verify verdict — gives the vision judge teeth. Flip to false to keep it advisory if LLM variance causes flakes.",
+    "vision_gate": true,
+    "_mobile_gate_note": "When true, an integrated mobile client that built+launched but connected NO call leg refutes the run. Default false because mobile<->web call automation is acknowledged flaky; the mobileRefuted signal is always recorded regardless.",
+    "mobile_gate": false
   },
   "checkpoints": {
     "cp1_after": "boot",

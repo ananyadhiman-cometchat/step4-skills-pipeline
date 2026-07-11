@@ -14,8 +14,48 @@ from __future__ import annotations
 import os, subprocess, time
 from pathlib import Path
 
-SDK = os.path.expanduser("~/Library/Android/sdk")
-JDK17 = "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
+SDK = os.path.expanduser(os.environ.get("ANDROID_HOME") or "~/Library/Android/sdk")
+
+
+def _is_jdk17(home: str) -> bool:
+    """True only if `home` is REALLY JDK 17 — `java_home -v 17` silently returns a NEWER JDK when 17
+    isn't installed, and using e.g. JDK 26 is the 'Unsupported class file major version 70' bug."""
+    java = os.path.join(home, "bin", "java")
+    if not os.path.isfile(java):
+        return False
+    try:
+        v = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=10)
+        return 'version "17' in (v.stderr + v.stdout)
+    except Exception:
+        return False
+
+
+def _jdk17_home() -> str:
+    """Resolve a REAL JDK 17 (Homebrew openjdk@17 → brew --prefix → validated java_home) instead of a
+    hardcoded Apple-Silicon path. Never returns a newer JDK: the classic-path fallback is left for the
+    selfheal jdk17 rule to report honestly as 'not installed' rather than silently using JDK 26."""
+    for p in ("/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home",
+              "/usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"):
+        if _is_jdk17(p):
+            return p
+    try:
+        r = subprocess.run(["brew", "--prefix", "openjdk@17"], capture_output=True, text=True, timeout=15)
+        cand = os.path.join(r.stdout.strip(), "libexec/openjdk.jdk/Contents/Home")
+        if r.returncode == 0 and _is_jdk17(cand):
+            return cand
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(["/usr/libexec/java_home", "-v", "17"], capture_output=True, text=True, timeout=10)
+        home = r.stdout.strip()
+        if r.returncode == 0 and _is_jdk17(home):   # ONLY accept if it is genuinely 17
+            return home
+    except Exception:
+        pass
+    return "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
+
+
+JDK17 = _jdk17_home()
 ADB = f"{SDK}/platform-tools/adb"
 UTF8 = 'export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8'
 

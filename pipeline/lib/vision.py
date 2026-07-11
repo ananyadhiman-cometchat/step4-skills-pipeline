@@ -6,7 +6,7 @@ subtle visual bugs (bottom-left ring, chat bleeding under the call, app header o
 only ever caught by a human eyeballing the screenshot. This module automates that judgment: it
 feeds a screenshot + a rubric to Claude (vision) and gets back a structured pass/fail per check.
 
-Pairs with `visual_baseline` ("did it change?"): vision here answers "is it correct?".
+Answers "is it correct?" against a named rubric (the perceptual "did it change?" baseline was removed).
 
 Reuses the pipeline's `claude -p` auth (no API key needed) — Claude Code reads the image via its
 Read tool and returns a strict JSON verdict.

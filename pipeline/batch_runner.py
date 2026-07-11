@@ -15,7 +15,7 @@ Usage:  python3 batch_runner.py                 # all waves, interactive
         python3 batch_runner.py --auto-approve   # CI/unattended (skips the human gate — dangerous)
 """
 from __future__ import annotations
-import argparse, json, subprocess, sys
+import argparse, json, os, subprocess, sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -60,9 +60,17 @@ def checkpoint(label, slugs, auto) -> bool:
 
 
 def drive_wave(wave, auto):
+    # FAIL LOUD on a mistyped/removed slug — silently dropping it (the old behaviour) meant a wave
+    # believed to run 2 use cases actually ran 1, and aggregate metrics under-counted with no signal.
+    unknown = [s for s in wave if s not in KNOWN]
+    if unknown:
+        print(f"\033[31m✗ wave {wave} names UNKNOWN slug(s) {unknown} — fix use_cases.json waves. Aborting.\033[0m",
+              file=sys.stderr)
+        sys.exit(3)
     slugs = [s for s in wave if s in KNOWN]
     if not slugs:
-        print(f"(skipping wave {wave} — no known slugs; already-done use cases feed aggregate only)"); return
+        print(f"(skipping empty wave {wave})"); return
+    os.environ["STEP4_WAVE_ID"] = "wave-" + "-".join(slugs)   # correlate all stages of this wave
     # Segment A for both, then CP1, then B for both, then CP2, then C.
     for s in slugs:
         if not run_segment(s, SEG_A):
