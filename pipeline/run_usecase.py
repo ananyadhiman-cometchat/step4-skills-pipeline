@@ -638,34 +638,62 @@ def stage_verify(S, uc):
                   evidence=[str(boot_tail)[:300]])
     _acc = cometchat.call_test_accounts(uc["slug"])
     a_email, b_email = _acc["web"][0], _acc["mobile"][0]   # A = receiver, B = sender
+    recv_uid, send_uid = _acc["web"][1], _acc["mobile"][1]
     password = uc.get("e2ePassword", "Mkt@seed2026!")
-    # STEP 3 — CROSS-PARTY chat RECEIVE proof (source of truth for chat): B sends a unique nonce, A must
-    # render it over a live socket. Retry once on a harness/transient miss; NEVER spin 6× on a clean fail.
+    submit = uc.get("e2eSubmit", "Sign In")
     nonce_base = f"rx-{uc['slug']}-{int(time.time())}"
-    chat, chat_attempts = {}, []
-    for attempt in range(2):
-        chat = verify.run_twoparty_chat(repo, web_url, demo_dir, a_email, b_email, password, f"{nonce_base}-{attempt}")
-        chat_attempts.append({"received": bool(chat.get("received")), "error": chat.get("error")})
-        if chat.get("received") or chat.get("error"):   # got a real verdict OR a harness error → stop
-            break
-    chat_ok, chat_harness = bool(chat.get("received")), bool(chat.get("error"))
-    # STEP 4 — single-browser web smoke: the REAL SDK-init signal (kit conversation list rendered) +
-    # the web-call screenshot for vision. sdk_ok is NO LONGER satisfied by a plain app login.
-    shot = str(repo / "_demo" / "web-call.png")
-    e2e = verify.run_chatcall_web(repo, a_email, password, web_url, shot)
-    sdk_ok = bool(e2e.get("sdkReady"))
-    # STEP 5 — TWO-PARTY call matrix (web↔web voice+video, signaling + server-answered) — the call
-    # source of truth (single-browser callUI is only evidence). call_answered now reads as the real uid.
-    matrix = verify.run_twoparty_web(repo, web_url, demo_dir, a_email, b_email, password,
-                                     env_file=str(ENV_FILE), slug=uc["slug"])
-    twoparty_ok = bool(matrix.get("ok"))
-    call_ok = twoparty_ok
-    call_matrix = {
-        "web-web": {"voice": bool(matrix.get("voice", {}).get("callWorks")),
-                    "video": bool(matrix.get("video", {}).get("callWorks")), "mode": "automated"},
-        "android-web": {"mode": "manual-demo", "note": "verified in demo boot-2 call matrix (CP2)"},
-        "ios-web": {"mode": "manual-demo", "note": "verified in demo boot-2 call matrix (CP2)"},
-    }
+    # The WEB-CLIENT SHAPE picks the e2e path: a Node web/ dir → browser DOM e2e; a Flutter-unified app
+    # (no web/, served static from app/build/web) → the flt-semantics tree; native-only → no web e2e.
+    has_web = (repo / "web").exists()
+    is_flutter = (repo / "app" / "pubspec.yaml").exists() and not has_web
+    if has_web:
+        # ---- Node web: cross-party receive (DOM) + single-browser SDK signal + two-party call ----
+        chat, chat_attempts = {}, []
+        for attempt in range(2):
+            chat = verify.run_twoparty_chat(repo, web_url, demo_dir, a_email, b_email, password, f"{nonce_base}-{attempt}")
+            chat_attempts.append({"received": bool(chat.get("received")), "error": chat.get("error")})
+            if chat.get("received") or chat.get("error"):
+                break
+        chat_ok, chat_harness = bool(chat.get("received")), bool(chat.get("error"))
+        shot = str(repo / "_demo" / "web-call.png")
+        e2e = verify.run_chatcall_web(repo, a_email, password, web_url, shot)
+        sdk_ok = bool(e2e.get("sdkReady"))
+        matrix = verify.run_twoparty_web(repo, web_url, demo_dir, a_email, b_email, password,
+                                         env_file=str(ENV_FILE), slug=uc["slug"])
+        twoparty_ok = bool(matrix.get("ok"))
+        call_ok = twoparty_ok
+        call_matrix = {"web-web": {"voice": bool(matrix.get("voice", {}).get("callWorks")),
+                                   "video": bool(matrix.get("video", {}).get("callWorks")), "mode": "automated"},
+                       "android-web": {"mode": "manual-demo", "note": "verified in demo boot-2 (CP2)"},
+                       "ios-web": {"mode": "manual-demo", "note": "verified in demo boot-2 (CP2)"}}
+    elif is_flutter:
+        # ---- Flutter web (CanvasKit): drive the flt-semantics tree. Chat RECEIVE proven here (A logs
+        # in, a peer REST-sends a unique nonce, A's live UI must render it). Flutter-web CALLING is
+        # deferred to the demo boot-2 mobile call matrix — marked as deferred, never faked. ----
+        cfg = cometchat._cfg(str(ENV_FILE))
+        shot = str(repo / "_demo" / "chat-receive.png")
+        chat, chat_attempts = {}, []
+        for attempt in range(2):
+            chat = verify.run_flutter_chat_receive(web_url, a_email, password, cfg, send_uid, recv_uid,
+                                                   f"{nonce_base}-{attempt}", shot, submit=submit)
+            chat_attempts.append({"received": bool(chat.get("received")), "error": chat.get("error")})
+            if chat.get("received") or chat.get("error"):
+                break
+        chat_ok, chat_harness = bool(chat.get("received")), bool(chat.get("error"))
+        sdk_ok = bool(chat.get("sdkReady") or chat.get("loggedIn"))
+        e2e = chat
+        matrix, twoparty_ok, call_ok = {"mode": "deferred-flutter-demo"}, None, None
+        call_matrix = {"web-web": {"mode": "deferred-flutter-demo",
+                                   "note": "Flutter web calling proven in demo boot-2 mobile matrix"},
+                       "android-web": {"mode": "manual-demo"}, "ios-web": {"mode": "manual-demo"}}
+    else:
+        # ---- native-only web (unreachable for the current 10 archetypes) — rely on demo boot-2 ----
+        shot = str(repo / "_demo" / "web-call.png")
+        chat, chat_attempts, e2e = {"error": "no web e2e for this archetype"}, [], {}
+        chat_ok, chat_harness, sdk_ok = False, True, bool(seed.get("ok"))
+        matrix, twoparty_ok, call_ok = {"mode": "deferred-demo"}, None, None
+        call_matrix = {"web-web": {"mode": "deferred-demo"}, "android-web": {"mode": "manual-demo"},
+                       "ios-web": {"mode": "manual-demo"}}
     # STEP 6 — AI moderation probe (reads the DELIVERED copy now, so masking can actually be observed)
     moderation = cometchat.check_moderation(str(ENV_FILE), uc["slug"])
     # STEP 7 — VISION review, now with TEETH on the call-critical rubrics (verify.vision_gate).
@@ -683,15 +711,19 @@ def stage_verify(S, uc):
     vision_critical_fail = shot_review.get("allCorrect") is False
     vision_gate = S.get("verify", {}).get("vision_gate", True)
     # SCORECARD — the verdict is a pure function of cross-party MACHINE evidence, not DOM shape.
-    scorecard = {"sdkInit": sdk_ok, "chatReceive": chat_ok, "callConnect": call_ok,
-                 "twoPartyWeb": twoparty_ok, "moderationActive": bool(moderation.get("active")),
+    scorecard = {"sdkInit": sdk_ok, "chatReceive": chat_ok,
+                 "callConnect": ("deferred-demo" if is_flutter else call_ok),
+                 "twoPartyWeb": ("deferred-demo" if is_flutter else twoparty_ok),
+                 "moderationActive": bool(moderation.get("active")),
                  "visionOk": (None if not vision_ran else not vision_critical_fail)}
     integratedUp = bool(dockerUp and healthy and sdk_ok)
-    refuted = not (sdk_ok and chat_ok and call_ok)
+    # Flutter web calling is proven in demo boot-2 (mobile matrix), not at verify — so it is NOT part
+    # of the verify refute; verify proves Flutter chat-receive + SDK-init.
+    refuted = not (sdk_ok and chat_ok and (True if is_flutter else bool(call_ok)))
     if vision_gate and vision_critical_fail:
         refuted = True
     td = verify.compose_down(repo) if dockerUp else {"dockerCleanupDone": True}
-    easeScore = 5 if (chat_ok and call_ok) else (3 if chat_ok else 1)
+    easeScore = (4 if chat_ok else 1) if is_flutter else (5 if (chat_ok and call_ok) else (3 if chat_ok else 1))
     res = {"useCase": uc["name"], "slug": uc["slug"], "dockerUp": dockerUp, "emulatorUp": False,
            "allServicesHealthy": healthy, "sdkInitOk": sdk_ok, "integratedUp": integratedUp,
            "cometchatUsersSeeded": 2 if seed.get("ok") else 0,
@@ -700,8 +732,8 @@ def stage_verify(S, uc):
            "callMatrix": call_matrix, "twoPartyWebWorks": twoparty_ok,
            "moderation": {"active": moderation.get("active"), "detail": moderation.get("note"),
                           "masked": moderation.get("masked"), "blocked": moderation.get("blocked")},
-           "reason": "chat(receive)+call(2party)+sdk proven" if not refuted
-                     else f"refuted: sdk={sdk_ok} chatRx={chat_ok} call={call_ok} vision={scorecard['visionOk']}",
+           "reason": ("chat(receive)+sdk proven; call→demo boot-2" if is_flutter else "chat(receive)+call(2party)+sdk proven")
+                     if not refuted else f"refuted: sdk={sdk_ok} chatRx={chat_ok} call={call_ok} vision={scorecard['visionOk']}",
            "easeScore": easeScore,
            "shotReview": {"allCorrect": shot_review.get("allCorrect"), "anyChanged": shot_review.get("anyChanged"),
                           "gallery": shot_review.get("gallery"), "results": shot_review.get("results")},
@@ -715,7 +747,7 @@ def stage_verify(S, uc):
         notes.append(f"[harness] cross-party chat proof did not run cleanly — {str(chat)[:300]}")
     elif not chat_ok:
         notes.append(f"[integration] cross-party message NOT received (real-time socket) — {chat_attempts}")
-    if not twoparty_ok:
+    if not is_flutter and not twoparty_ok:
         notes.append(f"[coverage] two-party web↔web call matrix incomplete — {str(matrix)[:250]}")
     if not moderation.get("active"):
         notes.append(f"[setup] AI moderation not observed — {moderation.get('note')} "
@@ -734,7 +766,7 @@ def stage_verify(S, uc):
                   f"verify:{uc['slug']} refuted (sdk={sdk_ok} chatRx={chat_ok} call={call_ok} vision={scorecard['visionOk']})",
                   {"dockerUp": dockerUp, "allServicesHealthy": healthy, "exit": 2}, gate="verify", err=err,
                   evidence=[shot, shot_review.get("gallery", "")])
-    print(f"OK verify:{uc['slug']} sdk={sdk_ok} chatRx={chat_ok} call2p={call_ok} "
+    print(f"OK verify:{uc['slug']} sdk={sdk_ok} chatRx={chat_ok} call={'demo-boot2' if is_flutter else call_ok} "
           f"mod={moderation.get('active')} vision={scorecard['visionOk']} ease={easeScore}"); return res
 
 

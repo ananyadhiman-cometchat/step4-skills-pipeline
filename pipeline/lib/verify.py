@@ -196,6 +196,32 @@ def run_twoparty_chat(repo_dir: Path, web_url: str, shot_dir: str, a_email: str,
     return {"error": "no verdict json", "tail": _tail(out), "chatWorks": False, "exitCode": code}
 
 
+def run_flutter_chat_receive(web_url: str, a_email: str, password: str, cfg: dict, sender_uid: str,
+                             receiver_uid: str, nonce: str, out_png: str, submit: str = "Sign In",
+                             timeout: int = 180) -> dict:
+    """CROSS-PARTY receive proof for a FLUTTER web app (no Node web/ dir). Drives the flt-semantics tree
+    via the shared standalone Playwright (e2e/webdriver): A logs in as the receiver, a peer REST-sends a
+    unique nonce, and A's live Flutter UI must render it. Returns {loggedIn, sdkReady, received, ...}."""
+    wd = Path(__file__).resolve().parent.parent / "e2e" / "webdriver"
+    driver = wd / "flutter_chat_receive.mjs"
+    if not driver.exists() or not (wd / "node_modules").exists():
+        return {"error": "flutter webdriver not set up (run boot/demo once to bootstrap it)",
+                "received": False, "chatWorks": False}
+    env = {"URL": web_url.rstrip("/") + "/", "A_EMAIL": a_email, "A_PASSWORD": password, "SUBMIT": submit,
+           "APP_ID": cfg.get("COMETCHAT_APP_ID", ""), "REGION": cfg.get("COMETCHAT_REGION", "us"),
+           "REST_API_KEY": cfg.get("COMETCHAT_REST_API_KEY", ""), "SENDER_UID": sender_uid,
+           "RECEIVER_UID": receiver_uid, "NONCE": nonce, "OUT": out_png,
+           "PLAYWRIGHT_BROWSERS_PATH": os.path.expanduser("~/Library/Caches/ms-playwright")}
+    code, out = _run(["node", str(driver)], cwd=str(wd), timeout=timeout, env=env)
+    for line in reversed((out or "").splitlines()):
+        if line.strip().startswith("{"):
+            try:
+                return json.loads(line.strip())
+            except Exception:
+                pass
+    return {"error": "no verdict json", "tail": _tail(out), "received": False, "chatWorks": False}
+
+
 def run_twoparty_web(repo_dir: Path, web_url: str, shot_dir: str,
                      caller_email: str, callee_email: str, password: str,
                      env_file: str = "", slug: str = "", retries: int = 3) -> dict:

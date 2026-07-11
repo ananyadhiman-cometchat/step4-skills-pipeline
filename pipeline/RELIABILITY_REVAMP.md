@@ -71,8 +71,12 @@ evidence**.
 - **Per-slug port offsets** for true concurrent lanes (needs the generated compose to read ports from
   env). Today: use cases still run sequentially on `:8080`/`:3000`; the compose builder-prune scoping
   and `-p <slug>` project naming are follow-ups.
-- **Mobile cross-party chat-receive** via a Maestro flow (the web cross-party proof is in; mobile still
-  relies on the call matrix + login→home vision).
+- **Mobile (RN / native Android / iOS) cross-party chat-receive** via a Maestro flow — still deferred
+  (mobile relies on the call matrix + login→home vision). **Flutter WEB cross-party receive is now DONE**
+  (`e2e/webdriver/flutter_chat_receive.mjs` drives the flt-semantics tree: A logs in, a peer REST-sends a
+  unique nonce, A's live UI must render it), so Flutter-unified use cases (e.g. `com`) get a real
+  chat-receive proof at `verify`; their web *calling* is deferred to the demo boot-2 mobile call matrix
+  (marked `deferred-flutter-demo`, never faked).
 - **Per-component memoization** (skip already-green components on re-run) — deliberately omitted to keep
   the integrate rollback deterministic; add behind a flag later.
 - **Vision confidence/abstain** scoring (the gate teeth are wired; confidence is a refinement).
