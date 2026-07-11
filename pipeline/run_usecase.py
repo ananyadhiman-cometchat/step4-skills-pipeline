@@ -41,6 +41,13 @@ def load(name):
     return json.loads((HERE / "config" / name).read_text())
 
 
+def e2e_password(uc):
+    """The shared seed password for a use case. Default is SLUG-DERIVED (mkt→Mkt@seed2026!,
+    com→Com@seed2026!) matching the requirements-pinned format — NOT the mkt-hardcoded literal, which
+    401s on every other use case's seeded accounts (confirmed: com uses Com@seed2026!)."""
+    return uc.get("e2ePassword") or f"{uc['slug'].capitalize()}@seed2026!"
+
+
 def git(repo: Path, *args) -> tuple[int, str]:
     cmd = ["git", "-c", "user.email=pipeline@step4.local", "-c", "user.name=step4-pipeline", *args]
     p = subprocess.run(cmd, cwd=str(repo), text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -395,7 +402,7 @@ def stage_demo(S, uc):
     # LOGIN + screenshot the logged-in home for each mobile client that launched OK — proves the app
     # reaches the backend (connectivity), which the launch screen alone doesn't. Uses a seeded account.
     li_acc = cometchat.call_test_accounts(uc["slug"]); li_email = li_acc["mobile"][0]
-    li_pw = uc.get("e2ePassword", "Mkt@seed2026!")
+    li_pw = e2e_password(uc)
     for plat in ("android", "ios"):
         if shots.get(plat, {}).get("ok") and plat_app_id.get(plat):
             try:
@@ -411,7 +418,7 @@ def stage_demo(S, uc):
         web_url = V.get("web_url", "http://localhost:3000")
         acc = cometchat.call_test_accounts(uc["slug"])
         m_email, w_email = acc["mobile"][0], acc["web"][0]
-        pw = uc.get("e2ePassword", "Mkt@seed2026!")
+        pw = e2e_password(uc)
         for plat in ("android", "ios"):
             if shots.get(plat, {}).get("ok"):
                 for ct in ("voice", "video"):
@@ -639,7 +646,7 @@ def stage_verify(S, uc):
     _acc = cometchat.call_test_accounts(uc["slug"])
     a_email, b_email = _acc["web"][0], _acc["mobile"][0]   # A = receiver, B = sender
     recv_uid, send_uid = _acc["web"][1], _acc["mobile"][1]
-    password = uc.get("e2ePassword", "Mkt@seed2026!")
+    password = e2e_password(uc)
     submit = uc.get("e2eSubmit", "Sign In")
     nonce_base = f"rx-{uc['slug']}-{int(time.time())}"
     # The WEB-CLIENT SHAPE picks the e2e path: a Node web/ dir → browser DOM e2e; a Flutter-unified app
