@@ -35,3 +35,18 @@ Genuine CometChat inconsistencies (skills / docs / product — distinct from the
 (The codegen ALSO omitted `enableCalls`/`UIKitCalls.init` — that miss is recorded in pipeline-notes as an
 agent gap, not a CometChat gap. Fix path for the app: add `..enableCalls = true`, call `CometChatUIKitCalls.
 init(appId, region)` in `onSuccess`, and set `CallNavigationContext.navigatorKey = <go_router rootNavigatorKey>`.)
+
+## Auto-repaired (self-heal witnessed — the fix's existence IS the finding)
+<!-- selfheal:compose-env -->
+- **`missedTrigger:`** [self-heal:compose-env] The production/deployment skill must document injecting COMETCHAT_* into the RUNTIME deployment env (docker-compose/service), not just .env.example — otherwise the backend mints an EMPTY auth token and the conversation list errors ('Oops') on every client.
+  - _auto-repaired by the harness (fix's existence IS the finding)_: injected `${COMETCHAT_*}` refs into the backend compose `environment:` (values in a git-ignored `.env`, so no secrets in the tracked compose).
+  - _trigger evidence_: `backend /api/auth/login returned cometchat_auth_token:"" → CometChatConversations rendered "Oops" on web + android + ios`
+<!-- selfheal:ios-deploy-target -->
+- **`missedTrigger:`** [self-heal:ios-deploy-target] cometchat-flutter-v6-calls / cometchat-ios must document that cometchat_calls_sdk requires an iOS deployment target >= 15.1 (Flutter/RN scaffold 13.0) — `pod install` fails 'requires a higher minimum iOS deployment version' otherwise. Ship the Podfile platform + post_install IPHONEOS_DEPLOYMENT_TARGET.
+  - _auto-repaired by the harness (fix's existence IS the finding)_: set `platform :ios, '15.1'` + post_install `IPHONEOS_DEPLOYMENT_TARGET=15.1` + pbxproj; iOS demo build then succeeded.
+  - _trigger evidence_: `Error: The plugin "cometchat_calls_sdk" requires a higher minimum iOS deployment version ... increase your application's deployment target to at least 15.1`
+<!-- selfheal:cleartext-http -->
+- **`missedTrigger:`** [self-heal:cleartext-http] The mobile native-setup skill must document that a RELEASE build talking to a local HTTP backend needs android:usesCleartextTraffic + a network_security_config AND the INTERNET permission in the MAIN manifest (Flutter injects INTERNET only into the DEBUG manifest) + iOS ATS NSAllowsArbitraryLoads.
+  - _auto-repaired by the harness (fix's existence IS the finding)_: added INTERNET to the main manifest + usesCleartextTraffic + network_security_config; release apk then reached the backend.
+  - _trigger evidence_: `release apk showed "Connection error. Check your network." — aapt: no android.permission.INTERNET in release apk (only in the debug manifest)`
+

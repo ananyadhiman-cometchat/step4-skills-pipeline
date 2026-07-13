@@ -14,7 +14,8 @@
     "build": "claude-sonnet-4-6",
     "integrate": "claude-sonnet-4-6",
     "judge": "claude-opus-4-8",
-    "vision": "claude-sonnet-4-6"
+    "vision": "claude-sonnet-4-6",
+    "critic": "claude-opus-4-8"
   },
   "max_turns": {
     "spec": 20,
@@ -28,7 +29,8 @@
     "spec": 1200,
     "provision": 2400,
     "build": 2400,
-    "integrate": 3000
+    "integrate": 3000,
+    "critic": 1800
   },
   "stage_timeout_default_s": 2400,
   "max_retries": 5,
@@ -77,7 +79,7 @@
     "backend_url": "http://localhost:8080",
     "web_url": "http://localhost:3000",
     "vision_review": true,
-    "_vision_gate_note": "When true, a Claude-vision FAIL on a call-critical rubric (ongoing/incoming) refutes the verify verdict — gives the vision judge teeth. Flip to false to keep it advisory if LLM variance causes flakes.",
+    "_vision_gate_note": "When true, a Claude-vision FAIL on a call-critical rubric (ongoing/incoming) refutes the verify verdict \u2014 gives the vision judge teeth. Flip to false to keep it advisory if LLM variance causes flakes.",
     "vision_gate": true,
     "_mobile_gate_note": "When true, an integrated mobile client that built+launched but connected NO call leg refutes the run. Default false because mobile<->web call automation is acknowledged flaky; the mobileRefuted signal is always recorded regardless.",
     "mobile_gate": false

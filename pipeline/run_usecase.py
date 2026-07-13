@@ -630,13 +630,29 @@ def stage_integrate(S, uc):
                                        log_dir=logs, deny_env=secrets.INTEGRATE_DENY_ENV)
         g = verify.build_gate(c["kind"], cdir)
         # SELF-HEAL parity with build: a known compile signature (jdk17/gradle/pod/…) auto-repairs+retries
+        healed = []
         if g["buildExitCode"] != 0:
-            ctx = {"stage": "integrate", "kind": c["kind"], "stack": c["stack"], "repo_dir": repo,
+            ctx = {"stage": "integrate", "slug": uc["slug"], "kind": c["kind"], "stack": c["stack"], "repo_dir": repo,
                    "comp_dir": cdir, "mobile_dir": cdir, "env_file": str(uc_env_file(S, uc)), "integrated": True}
             healed = selfheal.heal(ctx, g["outputTail"])
             if healed:
                 print(f"  self-heal integrate:{c['name']} → {[h['rule'] for h in healed]}; retrying")
                 g = verify.build_gate(c["kind"], cdir, env=ctx.get("env")); g["selfHealed"] = [h["rule"] for h in healed]
+        # LAYER 2 — SKILLS CRITIC (concurrent, per-component). An adversarial reviewer reads THIS component's
+        # diff + the build/self-heal log and extracts genuine CometChat skills/docs/SDK gaps the builder did
+        # NOT self-report, with retraction discipline. Runs even on a CLEAN compile (most gaps are silent —
+        # a component that renders but no-ops) and DURING integrate so self-heal can't fix-and-hide.
+        if S.get("skills_critic", True):
+            sh_ids = ", ".join(h["rule"] for h in healed) or "none"
+            try:
+                cr = claude_runner.run_headless(
+                    prompts.render_skills_critic(S, uc, c, g.get("outputTail", ""), g["buildExitCode"], sh_ids),
+                    settings=S, phase="B", cwd=cdir, model_key="critic", label=f"critic-{c['name']}",
+                    log_dir=logs, deny_env=secrets.INTEGRATE_DENY_ENV)
+                print(f"  skills-critic {c['name']}: agentOk={cr.get('agentOk')} tokens={cr.get('tokens')}")
+                obs.event(S, uc["slug"], "integrate", "critic_end", component=c["name"], agentOk=cr.get("agentOk"))
+            except Exception as e:
+                print(f"  skills-critic {c['name']} skipped: {str(e)[:100]}")
         rep = {"component": c["name"], "kind": c["kind"], "stack": c["stack"],
                "compileExitCode": g["buildExitCode"], "tokens": r["tokens"],
                "hitMaxTurns": r.get("hitMaxTurns"), "isError": r.get("isError"),
@@ -675,10 +691,12 @@ def stage_verify(S, uc):
     hpaths = V.get("backend_health_paths") or [V.get("backend_health_path", "/health")]
     # Inject THIS use case's OWN CometChat creds into the backend compose env. The integrate code reads
     # env('COMETCHAT_APP_ID') to mint the auth token, but compose passed none → empty token → the app
-    # skips CometChat login → the conversation list errors ("Oops") on every client. (Self-heal rule.)
-    _ok, _dt = selfheal._fix_compose_env({"repo_dir": repo, "env_file": str(uc_env_file(S, uc))})
-    if _ok:
-        print(f"  verify compose-env: {_dt}")
+    # skips CometChat login → the conversation list errors ("Oops") on every client. Routed through
+    # preapply so self-heal WITNESSES it as a skills finding (not a silent fix).
+    _ce = selfheal.preapply({"stage": "verify", "slug": uc["slug"], "repo_dir": repo,
+                             "env_file": str(uc_env_file(S, uc)), "integrated": True})
+    if _ce:
+        print(f"  verify compose-env self-heal: {[x['rule'] for x in _ce]}")
     # A Flutter-unified app serves web statically from app/build/web — host-build the INTEGRATED web
     # (with CometChat + the semantics hook, empty API_URL → nginx /api proxy) BEFORE compose, else the
     # web container serves the stale baseline build and the chat-receive proof runs against the wrong app.

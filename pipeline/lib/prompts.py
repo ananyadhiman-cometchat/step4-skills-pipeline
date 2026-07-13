@@ -85,6 +85,27 @@ def render_integrate(settings, uc: dict, comp: dict) -> str:
         gaps_file=f"pipeline-state/gaps/{uc['slug']}.md", vue_note=vue_note)
 
 
+def _skill_family(stack: str, kind: str) -> str:
+    s = (stack or "").lower()
+    if "flutter" in s:    return "flutter-v6"
+    if "react native" in s or "expo" in s: return "native"
+    if "compose" in s or "kotlin" in s or "android" in s: return "android-v6"
+    if "swift" in s or "ios" in s: return "ios"
+    if "angular" in s:    return "angular"
+    return "react"        # next/react/vue web default → the React kit family
+
+
+def render_skills_critic(settings, uc: dict, comp: dict, log_tail: str, compile_exit: int,
+                         selfheal_ids: str) -> str:
+    return _tmpl("skills_critic.md.tmpl").format(
+        name=uc["name"], slug=uc["slug"], comp=comp["name"], stack=comp["stack"],
+        platform=comp["kind"], comp_dir=comp["dir"],
+        log_tail=(log_tail or "(no log captured)")[-4000:], compile_exit=compile_exit,
+        selfheal_ids=selfheal_ids or "none",
+        skill_family=_skill_family(comp["stack"], comp["kind"]),
+        gaps_file=f"pipeline-state/gaps/{uc['slug']}.md")
+
+
 # NOTE: the adversarial LLM judge was removed. The verify verdict is now a DETERMINISTIC scorecard of
 # cross-party machine evidence (cross-party receive + two-party call + real SDK-init + vision), not an
 # LLM opinion. render_judge / judge.md.tmpl / _parse_judge (all previously dead code with zero callers)
