@@ -54,7 +54,8 @@ def render_requirements(settings, uc: dict) -> str:
 
 
 def render_provision(settings, uc: dict | None = None) -> str:
-    return _tmpl("provision.md.tmpl")
+    uc = uc or {}
+    return _tmpl("provision.md.tmpl").format(name=uc.get("name", "use case"), slug=uc.get("slug", "app"))
 
 
 def render_containerize(settings, uc: dict) -> str:

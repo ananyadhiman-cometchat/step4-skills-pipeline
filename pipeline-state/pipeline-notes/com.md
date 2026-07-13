@@ -41,3 +41,24 @@
   prompt should mandate (a) Semantics(identifier: 'email-input'/...) on inputs+buttons, and (b) the
   Flutter web HTML renderer (--web-renderer html) or the a11y tree. App works; only the automated
   post-login screenshot is blocked by these build-time choices.
+
+### auto-recorded verify triage (com)
+- [integration] cross-party message NOT received (real-time socket) — [{'received': False, 'error': None}, {'received': False, 'error': None}]
+- [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)
+- [visual] Claude-vision flagged: web-call(fullscreen,no_app_chrome,no_chat_bleed,controls), chat-receive(list_scrolls,composer) — see gallery /Users/admin/Desktop/automate/runs/com/_demo/shot-review.html
+
+### auto-recorded verify triage (com)
+- [integration] cross-party message NOT received (real-time socket) — [{'received': False, 'built': True, 'error': None}, {'received': False, 'built': True, 'error': None}]
+- [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)
+- [visual] Claude-vision flagged: web-call(fullscreen,no_app_chrome,no_chat_bleed,controls), chat-receive(list_scrolls,composer) — see gallery /Users/admin/Desktop/automate/runs/com/_demo/shot-review.html
+
+### auto-recorded verify triage (com)
+- [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)
+- [visual] Claude-vision flagged: web-call(fullscreen,no_app_chrome,no_chat_bleed,controls) — see gallery /Users/admin/Desktop/automate/runs/com/_demo/shot-review.html
+
+### auto-recorded verify triage (com)
+- [integration] cross-party message NOT received (real-time socket) — [{'received': False, 'built': True, 'error': None}, {'received': False, 'built': True, 'error': None}]
+- [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)
+
+### auto-recorded verify triage (com)
+- [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)

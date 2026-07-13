@@ -1,0 +1,34 @@
+# CROSS-PARTY chat-RECEIVE proof on the MOBILE Flutter client. CometChat renders message bubbles on a
+# canvas and does NOT expose their text (or reliably the conversation-list names) to the accessibility
+# tree, so Maestro CANNOT assert message content — this flow only NAVIGATES to the sender's thread by
+# COORDINATE and screenshots it; the caller VISION-judges whether the unique NONCE bubble is rendered.
+# Params: APP_ID, ROLE, SUBMIT, OUT.  (SENDER is accepted but unused — kept for call-site compatibility.)
+appId: ${APP_ID}
+---
+- launchApp: { clearState: true }
+- tapOn: { text: "Don't Show Again", optional: true }
+- tapOn: { text: "OK", optional: true }
+# demo-account quick-fill (fills the receiver's creds) then submit
+- tapOn: { text: "${ROLE}", optional: true }
+- waitForAnimationToEnd: { timeout: 3000 }
+- tapOn: { id: "login-submit", optional: true }
+- tapOn: { text: "${SUBMIT}", optional: true }
+- extendedWaitUntil: { notVisible: { text: "${SUBMIT}" }, timeout: 25000 }
+- waitForAnimationToEnd: { timeout: 4000 }
+# open the CometChat conversation surface (bottom-nav "Messages" — Material3 labels aren't tappable text
+# nodes, so a coordinate tap on the CENTER of a 3-tab bar is the reliable path)
+- tapOn: { text: "Messages", optional: true }
+- tapOn: { point: "50%,95%" }
+- waitForAnimationToEnd: { timeout: 5000 }
+# wait for the CometChat list to render (SDK logged-in), giving the socket time to sync the conversation
+- extendedWaitUntil: { visible: { text: "Chats" }, timeout: 45000, optional: true }
+- waitForAnimationToEnd: { timeout: 8000 }
+# open the first conversation (the sender's thread) by coordinate — the row sits near the top of the list
+- tapOn: { point: "50%,22%" }
+- waitForAnimationToEnd: { timeout: 6000 }
+# the thread opens at the last-READ position (a "new messages" divider), so the just-arrived nonce is
+# BELOW the fold — swipe content up to reach the BOTTOM (newest message) before the screenshot.
+- swipe: { start: "50%, 70%", end: "50%, 25%" }
+- swipe: { start: "50%, 70%", end: "50%, 25%" }
+- waitForAnimationToEnd: { timeout: 2500 }
+- takeScreenshot: ${OUT}

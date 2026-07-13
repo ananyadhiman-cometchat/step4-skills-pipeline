@@ -182,6 +182,34 @@ _REGISTRY = {"rn": RNProvider, "flutter": FlutterProvider,
              "android-native": AndroidNativeProvider, "ios-native": IOSNativeProvider}
 
 
+def ensure_flutter_web_semantics(app_dir) -> bool:
+    """Guarantee the app forces Flutter's accessibility tree on at startup. Flutter web is CanvasKit-only
+    (no DOM); the flt-semantics tree — the only thing web automation can drive — is NOT built unless the
+    app calls SemanticsBinding.instance.ensureSemantics() (or the user clicks the a11y placeholder). The
+    baseline may have it, but the CometChat integrate codegen rewrites main.dart from scratch and drops
+    it, so the web chat-receive proof then finds no inputs. Inject it deterministically before every web
+    build. Idempotent. Returns True if present/added."""
+    main = Path(app_dir) / "lib" / "main.dart"
+    if not main.exists():
+        return False
+    t = main.read_text()
+    if "ensureSemantics" in t:
+        return True
+    import re as _re
+    if "package:flutter/semantics.dart" not in t:
+        t = t.replace("import 'package:flutter/material.dart';",
+                      "import 'package:flutter/material.dart';\nimport 'package:flutter/semantics.dart';", 1)
+    call = "  SemanticsBinding.instance.ensureSemantics();  // web a11y tree for automation\n"
+    nt = _re.sub(r"(WidgetsFlutterBinding\.ensureInitialized\(\);\n)", r"\1" + call, t, count=1)
+    if nt == t:   # no ensureInitialized() → add both at the top of main()
+        nt = _re.sub(r"(main\(\)\s*async\s*\{\n)",
+                     r"\1  WidgetsFlutterBinding.ensureInitialized();\n" + call, t, count=1)
+    if nt == t:
+        return False
+    main.write_text(nt)
+    return True
+
+
 def host_build_flutter_web(app_dir, api_url: str = "", env_file: str = "") -> dict:
     """Build Flutter web on the HOST (the validated Flutter version) so the web Dockerfile can serve
     the static `build/web` via nginx — no Flutter-version drift between validation and the container.
@@ -194,9 +222,36 @@ def host_build_flutter_web(app_dir, api_url: str = "", env_file: str = "") -> di
         return {"ok": False, "note": "not a flutter app"}
     _sh("flutter create . --platforms=web", cwd=str(app_dir), timeout=300)
     write_flutter_env(app_dir, api_url, env_file)
+    ensure_flutter_web_semantics(app_dir)   # the flt-semantics tree the web e2e drives (survives integrate rewrite)
     code, out = _sh(f"flutter build web --release --dart-define=API_URL={api_url}", cwd=str(app_dir), timeout=900)
     return {"ok": code == 0 and (app_dir / "build/web/index.html").exists(),
             "exitCode": code, "tail": mobile._tail(out)}
+
+
+def build_install_flutter_android(app_dir, api_url: str, env_file: str = "", integrated: bool = True) -> dict:
+    """Build the Flutter android release apk (with the CometChat creds + cleartext/INTERNET guards baked)
+    and install it on the booted emulator. Shared by demo and by verify's mobile chat-receive proof.
+    Returns {ok, appId, apk}. Runs the self-heal preapply guards first so a fresh integrate tree gets
+    INTERNET + cleartext + the real creds every time."""
+    app = Path(app_dir)
+    if not mobile.boot_android():
+        return {"ok": False, "note": "no android emulator"}
+    selfheal.preapply({"stage": "verify", "kind": "app", "stack": "Flutter", "repo_dir": app.parent,
+                       "comp_dir": app, "mobile_dir": app, "env_file": env_file, "integrated": integrated})
+    _sh("flutter create . --platforms=android", cwd=str(app), timeout=300)
+    _sh("flutter pub get", cwd=str(app), timeout=600)
+    write_flutter_env(app, api_url, env_file)   # API_URL base + COMETCHAT_* creds into the .env asset
+    dd = app / ".dart_define.json"
+    defs = f"--dart-define-from-file={dd}" if dd.exists() else ""
+    code, o = _sh(f'export JAVA_HOME="{mobile.JDK17}"; export ANDROID_HOME="{mobile.SDK}"; '
+                  f'flutter build apk --release --dart-define=API_URL={api_url} {defs}', cwd=str(app), timeout=1800)
+    apk = next(iter((app / "build/app/outputs/flutter-apk").glob("app-release.apk")), None) if code == 0 else None
+    if not apk:
+        return {"ok": False, "buildExit": code, "tail": mobile._tail(o)}
+    aid = resolve_app_id("app", app) or "com.example.app"
+    ADB = mobile.ADB
+    subprocess.run([ADB, "install", "-r", "-g", str(apk)], capture_output=True, timeout=300)
+    return {"ok": True, "appId": aid, "apk": str(apk), "buildExit": 0}
 
 
 def login_and_shot(platform: str, app_id: str, email: str, password: str, out_png: str,

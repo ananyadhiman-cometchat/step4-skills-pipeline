@@ -5,9 +5,9 @@ self-assessment. Per STEP4_PIPELINE §3. e2e runner commands come from
 settings.verify.e2e; if unset, we record 'not-configured' rather than fake a pass.
 """
 from __future__ import annotations
-import json, os, shlex, subprocess, time, urllib.request
+import json, os, re, shlex, subprocess, time, urllib.request
 from pathlib import Path
-from lib import cometchat
+from lib import cometchat, mobile
 
 
 def _run(cmd, cwd=None, timeout=1800, env=None) -> tuple[int, str]:
@@ -123,6 +123,16 @@ def _backend_build(d: Path, env: dict | None = None) -> tuple[int, str]:
 def compose_up(repo_dir: Path) -> tuple[bool, str]:
     # --build so each boot reflects the CURRENT committed code (not a stale cached image)
     code, out = _run(["docker", "compose", "up", "-d", "--build"], cwd=str(repo_dir), timeout=1200)
+    # Transient registry/metadata timeouts ('DeadlineExceeded'/'context deadline exceeded'/'failed to
+    # solve' while loading base-image metadata) are infra flakes, not code errors — the base images are
+    # already local after the first boot. Retry ONCE offline (--pull=false) before declaring the boot dead.
+    if code != 0 and re.search(r"DeadlineExceeded|context deadline exceeded|failed to (solve|fetch)|"
+                               r"i/o timeout|TLS handshake timeout|temporary failure", out or "", re.I):
+        b_code, b_out = _run(["docker", "compose", "build", "--pull=false"], cwd=str(repo_dir), timeout=1200)
+        if b_code == 0:
+            code, out = _run(["docker", "compose", "up", "-d", "--no-build"], cwd=str(repo_dir), timeout=600)
+        else:
+            out = (out or "") + "\n[retry --pull=false] " + _tail(b_out)
     return code == 0, _tail(out)
 
 
@@ -220,6 +230,64 @@ def run_flutter_chat_receive(web_url: str, a_email: str, password: str, cfg: dic
             except Exception:
                 pass
     return {"error": "no verdict json", "tail": _tail(out), "received": False, "chatWorks": False}
+
+
+def _role_from_email(email: str) -> str:
+    """Map a seeded receiver email to its demo-account quick-fill button label. Maestro can't type into
+    the Flutter Key-based login fields, so login goes through the visible demo-role button; the role is
+    encoded in the seed email local part (jamie.member@… → Member, marco.mod@… → Moderator)."""
+    local = (email or "").split("@")[0].lower()
+    for needle, role in (("admin", "Admin"), ("moderator", "Moderator"), ("mod", "Moderator"),
+                         ("member", "Member"), ("guest", "Guest")):
+        if needle in local:
+            return role
+    return "Member"
+
+
+def run_flutter_chat_receive_mobile(repo_dir: Path, api_url: str, env_file: str, cfg: dict,
+                                    a_email: str, sender_uid: str, receiver_uid: str, nonce: str,
+                                    out_png: str, sender_name: str = "", submit: str = "Sign In",
+                                    settings: dict | None = None, timeout: int = 240) -> dict:
+    """CROSS-PARTY receive proof on the MOBILE Flutter client (android) — CometChat's SDK initialises on
+    android/ios but NOT on Flutter web (shared_preferences MissingPluginException), so the real chat proof
+    lives here. Build+install the integrated apk, REST-send a unique nonce from the peer, then drive
+    Maestro: A logs in (demo-role button), opens Messages, and OPENS the sender's thread. CometChat renders
+    bubbles on a canvas (their text is NOT in the a11y tree, so Maestro can't assert it) — instead we
+    VISION-judge the thread screenshot for the nonce bubble. Catches a dead socket / wrong creds / missing
+    CometChat login (all of which leave the list on 'Oops'). Returns {received, built, sent, shot}."""
+    from lib import providers, vision
+    b = providers.build_install_flutter_android(repo_dir / "app", api_url, env_file, integrated=True)
+    if not b.get("ok"):
+        return {"received": False, "chatWorks": False, "built": False,
+                "error": f"android build/install failed (exit={b.get('buildExit')})", "tail": b.get("tail", "")}
+    # peer B REST-sends the unique nonce to receiver A (persisted; also pushed over A's live socket)
+    sent = cometchat.send_message(cfg, sender_uid, receiver_uid, nonce)
+    role = _role_from_email(a_email)
+    maestro = os.path.expanduser("~/.maestro/bin/maestro")
+    flow = Path(__file__).resolve().parent.parent / "e2e" / "mobile_flows" / "chat_receive.flow.yaml"
+    dev = subprocess.run([mobile.ADB, "devices"], capture_output=True, text=True).stdout
+    serial = next((l.split()[0] for l in dev.splitlines()[1:] if "\tdevice" in l), None)
+    # Maestro AUTO-APPENDS `.png` to the takeScreenshot path — strip our extension so it lands at out_png.
+    maestro_out = out_png[:-4] if out_png.lower().endswith(".png") else out_png
+    args = [maestro, *(["--device", serial] if serial else []), "test", str(flow),
+            "-e", f"APP_ID={b['appId']}", "-e", f"ROLE={role}", "-e", f"SUBMIT={submit}",
+            "-e", f"SENDER={sender_name or 'Chat'}", "-e", f"NONCE={nonce}", "-e", f"OUT={maestro_out}"]
+    env = {**os.environ, "PATH": os.path.expanduser("~/.maestro/bin:") + os.environ.get("PATH", "")}
+    p = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
+    navigated = os.path.exists(out_png) and os.path.getsize(out_png) > 1000
+    # VISION verdict: the nonce bubble must be visibly rendered in A's thread (canvas text Maestro can't read)
+    received, vis = False, {}
+    if navigated:
+        vis = vision.judge_screenshot(
+            out_png,
+            [{"id": "nonce", "check": f"A chat message bubble containing the exact text \"{nonce}\" is visible"}],
+            context="Flutter CometChat conversation thread; proving a cross-party message was received",
+            settings=settings)
+        received = bool(vis.get("overallPass"))
+    return {"received": received, "chatWorks": received, "built": True, "navigated": navigated,
+            "sent": bool(sent), "role": role, "sdkReady": received, "shot": out_png,
+            "visionReason": (vis.get("checks") or [{}])[0].get("reason") if vis else None,
+            "tail": _tail(p.stdout + p.stderr)}
 
 
 def run_twoparty_web(repo_dir: Path, web_url: str, shot_dir: str,

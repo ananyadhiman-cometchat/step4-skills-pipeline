@@ -149,9 +149,59 @@ def _fix_disk(ctx) -> tuple[bool, str]:
 
 
 def _fix_compose_env(ctx) -> tuple[bool, str]:
-    """UC1: integrate wired COMETCHAT_* into code but not docker-compose → SDK init fails at boot.
-    (Handled today by the integrate prompt + manual wiring; recorded as a guard so it's checked.)"""
-    return False, "compose-env is a codegen-guard (integrate prompt); no runtime patch"
+    """Integrate wires the backend CODE to mint a CometChat auth token (reads env('COMETCHAT_APP_ID')
+    etc.), but docker-compose passes NONE of those creds to the backend container → the mint bails to an
+    empty token → the app skips CometChat login → the conversation list errors ("Oops") on EVERY client.
+    Inject `${VAR}` REFERENCES into the backend `environment:` block and put the real VALUES in a
+    git-ignored `.env` (docker-compose's default interpolation file) — so live secrets never land in the
+    TRACKED compose file (the pre-push secret scan would rightly block that). Emits BOTH REST-key names
+    (COMETCHAT_REST_KEY and COMETCHAT_REST_API_KEY) to absorb the codegen naming drift between them."""
+    repo = Path(ctx.get("repo_dir", "")); env_file = ctx.get("env_file")
+    comp = repo / "docker-compose.yml"
+    if not comp.exists() or not env_file or not os.path.exists(os.path.expanduser(env_file)):
+        return False, "no compose / env_file"
+    from lib import cometchat
+    cfg = cometchat._cfg(env_file)
+    appid = cfg.get("COMETCHAT_APP_ID", "")
+    if not appid:
+        return False, "no COMETCHAT_APP_ID in env_file"
+    rest = cfg.get("COMETCHAT_REST_API_KEY", "") or cfg.get("COMETCHAT_REST_KEY", "")
+    kv = {"COMETCHAT_APP_ID": appid, "COMETCHAT_REGION": cfg.get("COMETCHAT_REGION", "us"),
+          "COMETCHAT_AUTH_KEY": cfg.get("COMETCHAT_AUTH_KEY", ""),
+          "COMETCHAT_REST_KEY": rest, "COMETCHAT_REST_API_KEY": rest}
+    # 1) VALUES → repo/.env (git-ignored; docker-compose auto-reads it for ${..} interpolation at `up`).
+    #    Merge: keep any non-COMETCHAT lines already there, refresh the COMETCHAT_* ones.
+    dotenv = repo / ".env"
+    keep = []
+    if dotenv.exists():
+        keep = [ln for ln in dotenv.read_text().splitlines()
+                if ln.strip() and not ln.strip().startswith("COMETCHAT_")]
+    dotenv.write_text("\n".join(keep + [f"{k}={v}" for k, v in kv.items() if v]) + "\n")
+    # 2) REFERENCES (never literal secrets) → the backend service `environment:` block.
+    t = comp.read_text()
+    if re.search(r'\$\{COMETCHAT_APP_ID', t):
+        return False, "compose already references COMETCHAT_* via ${..}"
+    t = "\n".join(ln for ln in t.splitlines() if not re.match(r"^\s*COMETCHAT_[A-Z_]+\s*:", ln))
+    out, in_backend, svc_indent, done = [], False, -1, False
+    for ln in t.splitlines():
+        m = re.match(r"^(\s*)([\w-]+):\s*$", ln)          # a "name:" header with no inline value
+        if m:
+            indent, name = len(m.group(1)), m.group(2)
+            if name == "backend" and indent <= 4:
+                in_backend, svc_indent = True, indent
+            elif in_backend and indent <= svc_indent and name != "backend":
+                in_backend = False                         # left the backend service block
+        out.append(ln)
+        if in_backend and not done and re.match(r"^\s+environment:\s*$", ln):
+            ind = (len(ln) - len(ln.lstrip())) + 2         # entries indent one level under environment:
+            for k in kv:
+                if kv[k]:
+                    out.append(" " * ind + f'{k}: "${{{k}:-}}"')   # ${KEY:-} — interpolated from repo/.env
+            done = True
+    if not done:
+        return False, "backend service has no `environment:` block to extend"
+    comp.write_text("\n".join(out) + "\n")
+    return True, "backend env → ${COMETCHAT_*} refs (values in git-ignored .env; no secrets in tracked compose)"
 
 
 # ---------- rule registry ----------
