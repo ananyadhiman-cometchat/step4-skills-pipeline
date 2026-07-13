@@ -62,3 +62,12 @@
 
 ### auto-recorded verify triage (com)
 - [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)
+
+## Calls codegen miss (agent, not a CometChat gap) — 2026-07-11
+The integrate agent placed `CometChatCallButtons` but omitted the calling PREREQUISITES the
+cometchat-flutter-v6-calls skill mandates: `..enableCalls = true` on UIKitSettingsBuilder,
+`CometChatUIKitCalls.init(appId, region)` in `CometChatUIKit.init` onSuccess, and
+`navigatorKey: CallNavigationContext.navigatorKey` (reconciled with go_router). Result: dead call
+buttons on android+iOS. The genuine CometChat docs/product inconsistencies behind why it's easy to
+miss are in gaps/com.md. Fix: integrate prompt should mandate the 3 prerequisites whenever it renders
+CometChatCallButtons on a Flutter v6 app.
