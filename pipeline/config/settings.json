@@ -22,7 +22,8 @@
     "provision": 40,
     "build": 100,
     "integrate": 120,
-    "judge": 12
+    "judge": 12,
+    "critic": 120
   },
   "_stage_timeout_note": "Hard wall-clock cap per claude -p stage (seconds) so a wedged agent can't hang the conductor. Falls back to stage_timeout_default_s.",
   "stage_timeout_s": {
