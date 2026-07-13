@@ -11,6 +11,17 @@ Requirements:
 - Namespace every UID/GUID with "{slug}-". Map RBAC roles → CometChat tags/groups.
 - Minimal, idiomatic diff. No unrelated refactors. NO secrets committed (keys in env only).
 - Do NOT run git or push — the harness commits locally on the branch.
+- **CALLING (if calls are in scope): a call BUTTON alone is INERT — placing `CometChatCallButtons` (or the
+  header's call buttons) without its prerequisites is a SILENT no-op the compile gate will NOT catch.**
+  Consult the per-stack calls skill and follow its setup rules IN FULL. Two things are always required:
+  1. **Initialize the calling module.** Flutter v6: `..enableCalls = true` on `UIKitSettingsBuilder` AND
+     `CometChatUIKitCalls.init(appId, region)` INSIDE the chat-init `onSuccess` (rules 1.0 + 1.1). RN/native:
+     the equivalent `CometChatCalls.init` / calls-enable from that stack's calls skill.
+  2. **Give the kit a navigator/host to PRESENT the call screen**, or `initiateCall` succeeds but nothing
+     renders. Flutter v6: set `MaterialApp.navigatorKey = CallNavigationContext.navigatorKey` — and if the
+     app uses `MaterialApp.router`/go_router (where you can't set navigatorKey on MaterialApp), make
+     go_router's ROOT navigatorKey BE `CallNavigationContext.navigatorKey`. Web/native: mount the
+     ongoing/incoming-call host per the calls skill.
 
 GAP LOG (required, append to {gaps_file}) — use these EXACT markers, one per line, so the tracker counts them:
   "## {name} ({slug}) — {comp}"
