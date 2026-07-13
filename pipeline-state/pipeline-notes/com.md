@@ -71,3 +71,21 @@ cometchat-flutter-v6-calls skill mandates: `..enableCalls = true` on UIKitSettin
 buttons on android+iOS. The genuine CometChat docs/product inconsistencies behind why it's easy to
 miss are in gaps/com.md. Fix: integrate prompt should mandate the 3 prerequisites whenever it renders
 CometChatCallButtons on a Flutter v6 app.
+
+## Cross-platform call testing — iOS simulator WebRTC limitation (2026-07-13)
+Fixed a REAL bug: iOS Info.plist had NO NSCamera/NSMicrophoneUsageDescription/UIBackgroundModes and the
+android manifest lacked CAMERA/RECORD_AUDIO/FOREGROUND_SERVICE_* — added via the new self-heal
+`call-permissions` rule (gaps/com.md). SIGNALING now works end-to-end on the android↔iOS pair: the caller
+shows the outgoing "Calling…" screen and the callee shows the incoming overlay ("Incoming video/voice call",
+Decline/Accept).
+
+STILL NOT CONNECTING on the iOS SIMULATOR: tapping Accept (voice OR video) drops iOS to the home screen,
+the android caller stays stuck on "Calling…", and CometChat never logs an `ongoing` action server-side
+(cometchat.call_answered = false for both parties). The WebRTC.xcframework DOES ship the ios-arm64_x86_64
+-simulator slice (so it's not the telehealth EXCLUDED_ARCHS arch exclusion), and audio-only fails too — so
+the media session (joinSession/WebRTC) cannot establish on the iOS simulator. NEEDS A REAL iOS DEVICE to
+confirm the app connects end-to-end (telehealth confirmed CometChat iOS calling works on a real 2-client
+device test). Known iOS kit call bugs are a documented secondary risk on real devices: ghost-call teardown
+(remote-end doesn't dismiss the ongoing screen) and "only the first call per launch connects" — see the
+telehealth review I4/I5. Harness: pipeline/e2e/call_matrix_flutter.py drives both directions and verdicts
+via call_answered — it correctly reports NOT-connected here (a real regression detector, media-independent).
