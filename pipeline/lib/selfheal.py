@@ -114,6 +114,53 @@ def _fix_jdk17(ctx) -> tuple[bool, str]:
     return False, "JDK17 not installed"
 
 
+def _fix_ios_deploy_target(ctx) -> tuple[bool, str]:
+    """The CometChat Flutter Calls SDK (cometchat_calls_sdk) needs iOS deployment target >= 15.1, but a
+    fresh Flutter app targets 13.0 → `pod install` fails ('requires a higher minimum iOS deployment
+    version'). Bump the Podfile `platform :ios`, force it on every pod via post_install, and raise the
+    Xcode project's IPHONEOS_DEPLOYMENT_TARGET. Idempotent."""
+    d = ctx.get("comp_dir") or ctx.get("mobile_dir")
+    if not d:
+        return False, "no dir"
+    ios = Path(d) / "ios"
+    pod = ios / "Podfile"
+    if not pod.exists():
+        return False, "no ios/Podfile"
+    changed = []
+    t = pod.read_text()
+    if re.search(r"platform :ios, ['\"]15\.[1-9]", t) is None:
+        if re.search(r"^\s*#?\s*platform :ios", t, re.M):
+            t = re.sub(r"^\s*#?\s*platform :ios.*$", "platform :ios, '15.1'", t, count=1, flags=re.M)
+        else:
+            t = "platform :ios, '15.1'\n" + t
+        changed.append("Podfile platform")
+    if "IPHONEOS_DEPLOYMENT_TARGET'] = '15.1'" not in t:
+        hook = ("\npost_install do |installer|\n"
+                "  installer.pods_project.targets.each do |target|\n"
+                "    flutter_additional_ios_build_settings(target) if defined?(flutter_additional_ios_build_settings)\n"
+                "    target.build_configurations.each do |config|\n"
+                "      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.1'\n"
+                "    end\n  end\nend\n")
+        if re.search(r"post_install do", t):   # already has a post_install → inject the setting into it
+            t = re.sub(r"(post_install do \|installer\|\n)",
+                       r"\1  installer.pods_project.targets.each { |tt| tt.build_configurations.each { |c| "
+                       r"c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.1' } }\n", t, count=1)
+        else:
+            t = t + hook
+        changed.append("post_install deployment target")
+    pod.write_text(t)
+    # Xcode project fallback (Runner target) — set any lower IPHONEOS_DEPLOYMENT_TARGET to 15.1
+    pbx = ios / "Runner.xcodeproj" / "project.pbxproj"
+    if pbx.exists():
+        pt = pbx.read_text()
+        npt = re.sub(r"IPHONEOS_DEPLOYMENT_TARGET = 1[0-4]\.[0-9];",
+                     "IPHONEOS_DEPLOYMENT_TARGET = 15.1;", pt)
+        if npt != pt:
+            pbx.write_text(npt); changed.append("pbxproj target")
+    subprocess.run(["rm", "-rf", str(ios / "Podfile.lock"), str(ios / "Pods")], capture_output=True)
+    return (bool(changed), "ios deploy target → 15.1 (" + ", ".join(changed) + ")" if changed else "already 15.1")
+
+
 def _fix_gradle_stale(ctx) -> tuple[bool, str]:
     """UC1: 'Could not read workspace metadata' after a cache wipe → stop daemon + clean."""
     d = ctx.get("comp_dir") or ctx.get("mobile_dir")
@@ -216,6 +263,10 @@ RULES = [
     {"id": "jdk17", "phase": "on_fail", "families": {"rn", "flutter", "android-native"},
      "sig": r"Unsupported class file major version|invalid source release|requires Java", "fix": _fix_jdk17,
      "note": "UC1: gradle needs JDK 17"},
+    {"id": "ios-deploy-target", "phase": "pre", "families": {"rn", "flutter"}, "when_integrated": True,
+     "sig": r"higher minimum iOS deployment version|IPHONEOS_DEPLOYMENT_TARGET|deployment target to at least",
+     "fix": _fix_ios_deploy_target,
+     "note": "UC2: cometchat_calls_sdk needs iOS deployment target >= 15.1 (Flutter defaults to 13.0)"},
     {"id": "gradle-stale", "phase": "on_fail", "families": {"rn", "flutter", "android-native"},
      "sig": r"Could not read workspace metadata|metadata\.bin|corrupt", "fix": _fix_gradle_stale,
      "note": "UC1: stop stale gradle daemon after a cache wipe"},
