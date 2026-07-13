@@ -114,6 +114,52 @@ def _fix_jdk17(ctx) -> tuple[bool, str]:
     return False, "JDK17 not installed"
 
 
+def _fix_call_permissions(ctx) -> tuple[bool, str]:
+    """CometChat voice/video needs native camera+mic (and iOS VoIP background modes). Codegen that places
+    the call buttons routinely omits the native permission declarations, so iOS silently fails (button
+    inert / incoming accept → immediately 'rejected' because the media session can't open) and android
+    can't capture media. Add them — ONLY when the app actually uses calls."""
+    app = Path(ctx.get("comp_dir") or ctx.get("mobile_dir") or "")
+    if not app.exists():
+        return False, "no app dir"
+    lib = app / "lib"
+    uses_calls = lib.exists() and any(
+        re.search(r"CometChatCallButtons|cometchat_calls|CometChatUIKitCalls|CometChatIncomingCall|enableCalls",
+                  p.read_text(errors="ignore")) for p in lib.rglob("*.dart"))
+    if not uses_calls:
+        return False, "app does not use calls — no permissions needed"
+    done = []
+    # iOS Info.plist — usage descriptions (accessing camera/mic WITHOUT these makes iOS fail the call)
+    pb = "/usr/libexec/PlistBuddy"
+    for plist in app.glob("ios/Runner/Info.plist"):
+        t = plist.read_text(errors="ignore")
+        if "NSCameraUsageDescription" not in t:
+            subprocess.run([pb, "-c", "Add :NSCameraUsageDescription string 'Camera is used for video calls.'", str(plist)], capture_output=True)
+            done.append("ios NSCameraUsageDescription")
+        if "NSMicrophoneUsageDescription" not in t:
+            subprocess.run([pb, "-c", "Add :NSMicrophoneUsageDescription string 'Microphone is used for voice and video calls.'", str(plist)], capture_output=True)
+            done.append("ios NSMicrophoneUsageDescription")
+        if "UIBackgroundModes" not in t:
+            subprocess.run([pb, "-c", "Add :UIBackgroundModes array", str(plist)], capture_output=True)
+            for i, mode in enumerate(("audio", "voip", "remote-notification")):
+                subprocess.run([pb, "-c", f"Add :UIBackgroundModes:{i} string {mode}", str(plist)], capture_output=True)
+            done.append("ios UIBackgroundModes")
+    # Android manifest — camera/mic + foreground-service perms for the calling service
+    man = app / "android/app/src/main/AndroidManifest.xml"
+    if man.exists():
+        t = man.read_text()
+        perms = ["android.permission.CAMERA", "android.permission.RECORD_AUDIO",
+                 "android.permission.MODIFY_AUDIO_SETTINGS", "android.permission.BLUETOOTH",
+                 "android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+                 "android.permission.FOREGROUND_SERVICE_CAMERA", "android.permission.POST_NOTIFICATIONS"]
+        add = "".join(f'\n    <uses-permission android:name="{p}"/>' for p in perms if p not in t)
+        if add:
+            nt = re.sub(r"(<manifest\b[^>]*>)", r"\1" + add, t, count=1)
+            if nt != t:
+                man.write_text(nt); done.append(f"android {sum(1 for p in perms if p not in t)} call perms")
+    return (bool(done), "call perms → " + ", ".join(done) if done else "already present")
+
+
 def _fix_ios_deploy_target(ctx) -> tuple[bool, str]:
     """The CometChat Flutter Calls SDK (cometchat_calls_sdk) needs iOS deployment target >= 15.1, but a
     fresh Flutter app targets 13.0 → `pod install` fails ('requires a higher minimum iOS deployment
@@ -266,6 +312,14 @@ RULES = [
      "note": "UC1: gradle needs JDK 17", "owner": "skills",
      "gap": "The core/build skill should pin the JDK/Kotlin floor (JDK 17; Kotlin >=2.2.0 for 6.0.x GA) — a newer "
             "JDK or older Kotlin fails with 'Unsupported class file major version' / 'incompatible metadata version'."},
+    {"id": "call-permissions", "phase": "pre", "families": {"rn", "flutter"}, "when_integrated": True,
+     "sig": r"NSCameraUsageDescription|NSMicrophoneUsageDescription|RECORD_AUDIO|camera permission|microphone permission",
+     "fix": _fix_call_permissions, "owner": "skills",
+     "note": "UC2: CometChat calls need native camera/mic (+ iOS VoIP background modes); codegen omits them",
+     "gap": "The calls skill should CO-LOCATE the native camera/mic + iOS UIBackgroundModes(audio/voip) "
+            "requirement with the CometChatCallButtons usage (or ship it via a config plugin that survives "
+            "regeneration) — without NSCamera/NSMicrophoneUsageDescription, iOS calls silently fail: the call "
+            "button is inert and an accepted incoming call is immediately 'rejected' (media session can't open)."},
     {"id": "ios-deploy-target", "phase": "pre", "families": {"rn", "flutter"}, "when_integrated": True,
      "sig": r"higher minimum iOS deployment version|IPHONEOS_DEPLOYMENT_TARGET|deployment target to at least",
      "fix": _fix_ios_deploy_target,
