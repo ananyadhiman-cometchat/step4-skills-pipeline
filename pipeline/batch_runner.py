@@ -34,7 +34,9 @@ KNOWN = {u["slug"] for u in CFG["use_cases"]}
 # from the integration branch and gates on that build compiling (see stage_demo) before CP2.
 SEG_A = ["preflight", "build", "containerize", "boot", "demo"]   # → CHECKPOINT 1 (manual verify)
 SEG_B = ["push-main", "integrate", "verify", "demo"]             # push-main = auto-push on CP1 → CHECKPOINT 2
-SEG_C = ["push-branch"]                                          # push-branch = auto-push on CP2
+SEG_C = ["readme", "push-branch"]                                # readme (commit) then auto-push on CP2
+# After SEG_C the wave ALWAYS runs a final `teardown` — the automatic last step: README shipped,
+# then everything is cleaned up (docker down -v, apps uninstalled, sims/emulator shut).
 
 
 def run(slug, stage) -> int:
@@ -88,7 +90,11 @@ def drive_wave(wave, auto):
         run(s, "teardown")
     for s in slugs:
         run_segment(s, SEG_C)
-    print(f"\n\033[32m✔ wave complete: {', '.join(slugs)}\033[0m")
+    # FINAL step — always cleanup at the end of the pipeline (apps + containers + sims), even if a
+    # push-branch gate tripped, so a wave never leaves demo apps installed or docker running.
+    for s in slugs:
+        run(s, "teardown")
+    print(f"\n\033[32m✔ wave complete (README shipped, cleaned up): {', '.join(slugs)}\033[0m")
 
 
 def main():

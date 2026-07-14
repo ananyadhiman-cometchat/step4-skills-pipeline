@@ -536,6 +536,29 @@ def stage_demo(S, uc):
     return res
 
 
+def stage_readme(S, uc):
+    """Generate + commit the repo-root README.md (codegen reads the real repo). Runs on the
+    integration branch so the README ships with the feature. Non-fatal if codegen produces nothing."""
+    repo = state.repo_dir(S, uc["slug"]); logs = repo / "_logs"
+    # ensure we're on the feature branch (README belongs with the integration, not bare main)
+    git(repo, "checkout", "-q", "feature/cometchat-integration")
+    r = claude_runner.run_headless(prompts.render_readme(S, uc, str(repo)), settings=S, phase="A",
+                                   cwd=repo, model_key="build", label="readme", log_dir=logs)
+    readme = repo / "README.md"
+    committed = False
+    if readme.exists() and readme.stat().st_size > 100:
+        git(repo, "add", "README.md")
+        code, _ = git(repo, "diff", "--cached", "--quiet")  # nonzero exit => staged changes exist
+        if code != 0:
+            git(repo, "commit", "-q", "-m", f"docs: README for {uc['name']}")
+            committed = True
+    res = {"useCase": uc["name"], "slug": uc["slug"], "readmeWritten": readme.exists(),
+           "committed": committed, "tail": r["tail"]}
+    state.write(S, uc["slug"], "readme", res)
+    print(f"OK readme:{uc['slug']} written={readme.exists()} committed={committed}")
+    return res
+
+
 def stage_teardown(S, uc):
     """Cleanly close the demo — docker down -v, uninstall THIS use case's apps + any stale prior-UC
     apps, shut sims/emulator."""
@@ -915,7 +938,7 @@ STAGES = {"preflight": stage_preflight, "provision-app": stage_provision,
           "build": stage_build, "containerize": stage_containerize, "boot": stage_boot,
           "demo": stage_demo, "teardown": stage_teardown,
           "push-main": stage_push_main, "integrate": stage_integrate,
-          "verify": stage_verify, "push-branch": stage_push_branch}
+          "verify": stage_verify, "readme": stage_readme, "push-branch": stage_push_branch}
 
 
 def main():

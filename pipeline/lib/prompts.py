@@ -69,6 +69,16 @@ def render_containerize(settings, uc: dict) -> str:
         web=web_stack, web_dir=web_dir, layout=layout)
 
 
+def render_readme(settings, uc: dict, repo: str) -> str:
+    comps = expand_components(uc)
+    layout = ", ".join(f"{c['dir']}/ ({c['stack']}, {c['kind']})" for c in comps)
+    mobile = uc.get("mobile") or uc.get("app") or "/".join(
+        x for x in (uc.get("android"), uc.get("ios")) if x) or "none"
+    return _tmpl("readme.md.tmpl").format(
+        name=uc["name"], slug=uc["slug"], backend=uc["backend"],
+        web=uc.get("web", "none"), mobile=mobile, layout=layout, repo=repo)
+
+
 def render_build(settings, uc: dict, comp: dict) -> str:
     return _tmpl("build.md.tmpl").format(
         name=uc["name"], slug=uc["slug"], comp=comp["name"], kind=comp["kind"],
