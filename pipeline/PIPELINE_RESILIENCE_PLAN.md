@@ -72,7 +72,59 @@ harden that into a real journal and add the missing supervisor + memory + recove
 
 ---
 
-## 3. Implementation options + tradeoffs
+## 3. Control plane — steering a running pipeline
+
+You never edit state directly — you talk to the communication agent (me), which controls the running
+pipeline on your behalf. The supervisor is steerable **because** state lives in the journal + memory, not
+a locked process: a directive is an instruction read at the next safe boundary, then a controlled
+re-entry — not the interruption of a fragile process.
+
+**Flow:** you → me (plain language) → I classify + confirm scope → a structured entry in the **command
+inbox** (`COMMANDS.jsonl`) + a memory note → the supervisor reads the inbox at **safe boundaries**
+(between steps, never mid-side-effect) and re-enters at the right point. This is the durable-execution
+"signal" mechanism (Temporal signals / DBOS `send`+`recv`).
+
+**Severity → re-entry point:**
+- **Tweak** (flag/env/constraint) → applied at the next step; nothing redone.
+- **Redirect a stage** (change a component's stack/spec) → update spec-pin + memory; re-run **from that
+  stage only**, downstream replays from the journal.
+- **Drastic** ("approach is wrong") → rewind to a journaled checkpoint and re-plan — a controlled rewind,
+  not from-scratch.
+- **Override the auto-fix loop** → halt the loop before it lands (fixes land in an isolated worktree +
+  re-gate first, so nothing is committed until it passes).
+- **Hard stop** → soft-interrupt flag: finish the current atomic step, then pause and wait.
+
+**Autonomy levels** (change any time): **auto** (auto-fix + continue) · **gated** (pause per stage) ·
+**checkpoint-only** (today's CP1/CP2). An **interrupt** ("pause") is always honored at the next boundary.
+
+## 4. Command scope — global vs per-use-case (so the journal never mixes them)
+
+Two command scopes, two **physically separate** stores. The **journal stays per-UC** (that UC's execution
+state + its own directives); **global policy lives outside it and is referenced, not copied.**
+
+- **Per-UC** → `pipeline-state/<slug>/{COMMANDS.jsonl, DIRECTIVES.md}` — only that UC's supervisor reads it.
+- **Global** → `pipeline-state/global/{COMMANDS.jsonl, POLICY.md}` — every UC's supervisor reads it at
+  startup + each boundary. A global command is stored **once**; when it triggers a re-run in `com`, com's
+  journal records a *reference* (`caused_by: G-007`), not a copy → single source of truth, no drift.
+
+**Scope is pinned at capture, not at read.** When you give a command I classify + **confirm** it
+(*"com only, or a global default for every use case?"*) before writing, so every entry carries
+`scope: "usecase:com"` or `scope: "global"`. The journal never guesses.
+
+**Precedence** (layered like CLAUDE.md global + project memory): **policy / constitution** = a hard floor a
+per-UC directive cannot override (secrets, verify-required); **defaults** = per-UC may override (e.g. the
+default backend). Effective rules = GLOBAL ⊕ per-UC.
+
+**Reach:** because each UC reads `global/POLICY.md` at its own preflight/build, a global directive flows
+into the spec-pin + codegen prompts of every UC that runs **after** it — including ones not built yet.
+Re-applying a global change to **already-finished** UCs is opt-in (I confirm before scheduling fan-out
+re-runs; each rewinds to its own checkpoint).
+
+**Provenance:** every journal re-entry is tagged with the causing command's id + scope, so *"why did com
+rebuild?"* always resolves to a specific directive — nothing is ambiguous because scope was pinned before
+it was written.
+
+## 5. Implementation options + tradeoffs
 
 Five ways to get the durable core. Ordered lightest → heaviest.
 
@@ -100,13 +152,18 @@ hybrid gives the *same* felt experience ("it just keeps going, remembers everyth
 
 ---
 
-## 4. Concrete build (phased — each phase is independently valuable)
+## 6. Concrete build (phased — each phase is independently valuable)
 
-**Phase 1 — Journal + supervisor + HALT packet (fixes Issue C, the highest-leverage).**
-- Harden `state.write` → append-only `pipeline-state/<slug>/journal.jsonl` with `{stage, step, status, idempotencyKey, sha, ts}`; add a `resume_cursor`.
+**Phase 1 — Journal + supervisor + HALT packet + control plane (fixes Issue C, the highest-leverage).**
+- Harden `state.write` → append-only `pipeline-state/<slug>/journal.jsonl` with `{stage, step, status, idempotencyKey, sha, caused_by, ts}`; add a `resume_cursor`.
 - New `supervisor.py` replacing `batch_runner`'s halt-and-return: runs the segment sequence, and on a gate
   fail writes `HALT.json` (stage, gate output, `git diff`, last-N `_logs`, hypotheses) and enters the
   recovery loop below. Heartbeat file so a watchdog/communicator can tell "running" vs "stuck".
+- **Control plane from day one (§3–§4), not bolted on later:** the command inbox — per-UC
+  `pipeline-state/<slug>/COMMANDS.jsonl` **and** global `pipeline-state/global/COMMANDS.jsonl` — read at
+  every safe boundary; the two-tier scope stores (`global/POLICY.md` + `<slug>/DIRECTIVES.md`) with the
+  precedence + `caused_by` provenance rules. The supervisor's boundary check = "apply pending commands
+  (global ⊕ per-UC), then proceed."
 - Idempotency: every side-effecting stage (push, provision, docker) checks the journal before acting →
   safe to resume.
 
@@ -136,7 +193,7 @@ hybrid gives the *same* felt experience ("it just keeps going, remembers everyth
 
 ---
 
-## 5. Risks & mitigations
+## 7. Risks & mitigations
 - **Exactly-once side effects** (double push/provision) → idempotency keys in the journal (Phase 1); DBOS if it bites.
 - **Auto-fix loop landing a wrong fix** → isolated worktree + re-gate before landing + bounded attempts + witness/gaps logging so a bad fix is visible, never silent.
 - **Behavioral verify still can't cover real-device calls** → explicit `unverified` status is the honest floor; don't fake green.
