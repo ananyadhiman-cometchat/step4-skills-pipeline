@@ -5,9 +5,9 @@ self-assessment. Per STEP4_PIPELINE §3. e2e runner commands come from
 settings.verify.e2e; if unset, we record 'not-configured' rather than fake a pass.
 """
 from __future__ import annotations
-import json, os, shlex, subprocess, time, urllib.request
+import json, os, re, shlex, subprocess, time, urllib.request
 from pathlib import Path
-from lib import cometchat
+from lib import cometchat, mobile
 
 
 def _run(cmd, cwd=None, timeout=1800, env=None) -> tuple[int, str]:
@@ -56,10 +56,13 @@ def _npm_gate(comp_dir: Path, prefer: list[str], fallback_tsc=True) -> tuple[int
         code, out = _run(["npm", "run", script], cwd=d)
         # A type-check that only fails INSIDE node_modules is a broken-library-types issue
         # (e.g. CometChat UI Kit ships type-imperfect .tsx), NOT an app/integration failure.
-        # The app bundles + runs regardless. Gate on the app's OWN errors only.
+        # RELAX ONLY when the failure genuinely IS that: there ARE `error TS` lines and every one is
+        # inside node_modules. A non-TS failure (exit!=0 with ZERO `error TS` lines — OOM, tsconfig
+        # resolution error, tool crash) is a REAL failure and must NOT be swallowed into a pass.
         if code != 0 and any(k in script for k in ("type", "check", "tsc")):
-            app_errs = [l for l in out.splitlines() if "error TS" in l and "node_modules" not in l]
-            if not app_errs:
+            ts_lines = [l for l in out.splitlines() if "error TS" in l]
+            app_errs = [l for l in ts_lines if "node_modules" not in l]
+            if ts_lines and not app_errs:
                 return 0, "type-check: only node_modules (library) type errors — app code clean\n" + _tail(out)
         return code, out
     if fallback_tsc and (comp_dir / "tsconfig.json").exists():
@@ -67,27 +70,30 @@ def _npm_gate(comp_dir: Path, prefer: list[str], fallback_tsc=True) -> tuple[int
     return 0, f"no build/typecheck script among {prefer} — scaffolding present, passing"
 
 
-def build_gate(kind: str, comp_dir: Path) -> dict:
+def build_gate(kind: str, comp_dir: Path, env: dict | None = None) -> dict:
+    """`env` (optional) is threaded to the native toolchains so a self-heal (e.g. JAVA_HOME=JDK17)
+    actually takes effect on the re-gate — previously the heal wrote JAVA_HOME into a dict build_gate
+    never read, so the most-common UC1 gradle failure was structurally unrecoverable."""
     d = str(comp_dir)
     if kind == "web":
         code, out = _npm_gate(comp_dir, ["build", "type-check", "typecheck"])
-    elif kind == "mobile":  # React Native — no 'build' script; typecheck is the real gate
-        code, out = _npm_gate(comp_dir, ["type-check", "typecheck", "build:check", "tsc", "lint"])
-    elif kind == "app":  # Flutter
-        code, out = _run(["flutter", "analyze"], cwd=d)
+    elif kind == "mobile":  # React Native — no 'build' script; typecheck is the real gate. NOT lint
+        code, out = _npm_gate(comp_dir, ["type-check", "typecheck", "build:check", "tsc"])
+    elif kind == "app":  # Flutter — errors are fatal; lint infos/warnings are NOT (they falsely RED the gate)
+        code, out = _run(["flutter", "analyze", "--no-fatal-infos", "--no-fatal-warnings"], cwd=d, env=env)
     elif kind == "android":
         gw = comp_dir / "gradlew"
-        code, out = _run(["./gradlew", "assembleDebug"], cwd=d) if gw.exists() else (127, "no gradlew")
+        code, out = _run(["./gradlew", "assembleDebug"], cwd=d, env=env) if gw.exists() else (127, "no gradlew")
     elif kind == "ios":
-        code, out = _run(["xcodebuild", "-scheme", comp_dir.name, "-sdk", "iphonesimulator", "build"], cwd=d)
+        code, out = _run(["xcodebuild", "-scheme", comp_dir.name, "-sdk", "iphonesimulator", "build"], cwd=d, env=env)
     elif kind == "backend":
-        code, out = _backend_build(comp_dir)
+        code, out = _backend_build(comp_dir, env=env)
     else:
         code, out = 127, f"unknown kind {kind}"
     return {"kind": kind, "buildExitCode": code, "outputTail": _tail(out)}
 
 
-def _backend_build(d: Path) -> tuple[int, str]:
+def _backend_build(d: Path, env: dict | None = None) -> tuple[int, str]:
     """LANGUAGE-NATIVE compile/syntax gate — the build stage checks the CODE, not that Docker builds
     (Docker is the containerize stage's job). Language checks come FIRST; docker-compose is only a
     last resort when no language toolchain is recognized (and it runs in the dir that HAS the compose
@@ -98,15 +104,18 @@ def _backend_build(d: Path) -> tuple[int, str]:
         cmd = ('out=$(find app routes database config public bootstrap -name "*.php" -print0 2>/dev/null '
                '| xargs -0 -r -n1 php -l 2>&1 | grep -iE "Parse error|Fatal error|Errors parsing" || true); '
                '[ -z "$out" ] && echo "php lint clean" || { echo "$out"; exit 1; }')
-        return _run(["bash", "-lc", cmd], cwd=str(d))
-    if (d / "go.mod").exists():               return _run(["go", "build", "./..."], cwd=str(d))
-    if (d / "pom.xml").exists():              return _run(["mvn", "-q", "-B", "compile", "-DskipTests"], cwd=str(d))
+        return _run(["bash", "-lc", cmd], cwd=str(d), env=env)
+    if (d / "go.mod").exists():               return _run(["go", "build", "./..."], cwd=str(d), env=env)
+    if (d / "pom.xml").exists():              return _run(["mvn", "-q", "-B", "compile", "-DskipTests"], cwd=str(d), env=env)
     if (d / "requirements.txt").exists() or (d / "pyproject.toml").exists():
-        return _run(["python3", "-m", "compileall", "-q", "."], cwd=str(d))
-    if (d / "package.json").exists():         return _run(["npm", "install"], cwd=str(d))
+        return _run(["python3", "-m", "compileall", "-q", "."], cwd=str(d), env=env)
+    if (d / "package.json").exists():
+        # NOT just `npm install`: a Node/TS backend must actually type-check/build, else a backend
+        # with type/syntax errors passes the gate as long as deps resolve. Reuse the JS typecheck gate.
+        return _npm_gate(d, ["build", "type-check", "typecheck", "compile"])
     for cd in (d, d.parent):                  # last resort: docker, in the dir that actually has the compose file
         if (cd / "docker-compose.yml").exists() or (cd / "compose.yaml").exists():
-            return _run(["docker", "compose", "build"], cwd=str(cd))
+            return _run(["docker", "compose", "build"], cwd=str(cd), env=env)
     return 0, "backend: no recognized build file — configure"
 
 
@@ -114,6 +123,16 @@ def _backend_build(d: Path) -> tuple[int, str]:
 def compose_up(repo_dir: Path) -> tuple[bool, str]:
     # --build so each boot reflects the CURRENT committed code (not a stale cached image)
     code, out = _run(["docker", "compose", "up", "-d", "--build"], cwd=str(repo_dir), timeout=1200)
+    # Transient registry/metadata timeouts ('DeadlineExceeded'/'context deadline exceeded'/'failed to
+    # solve' while loading base-image metadata) are infra flakes, not code errors — the base images are
+    # already local after the first boot. Retry ONCE offline (--pull=false) before declaring the boot dead.
+    if code != 0 and re.search(r"DeadlineExceeded|context deadline exceeded|failed to (solve|fetch)|"
+                               r"i/o timeout|TLS handshake timeout|temporary failure", out or "", re.I):
+        b_code, b_out = _run(["docker", "compose", "build", "--pull=false"], cwd=str(repo_dir), timeout=1200)
+        if b_code == 0:
+            code, out = _run(["docker", "compose", "up", "-d", "--no-build"], cwd=str(repo_dir), timeout=600)
+        else:
+            out = (out or "") + "\n[retry --pull=false] " + _tail(b_out)
     return code == 0, _tail(out)
 
 
@@ -161,6 +180,114 @@ def run_chatcall_web(repo_dir: Path, email: str, password: str, web_url: str, sh
             except Exception:
                 pass
     return {"error": "no verdict json", "tail": _tail(out)}
+
+
+def run_twoparty_chat(repo_dir: Path, web_url: str, shot_dir: str, a_email: str, b_email: str,
+                      password: str, nonce: str) -> dict:
+    """CROSS-PARTY real-time RECEIVE proof: B sends a unique NONCE, A must render it (live socket).
+    This is the source of truth for chat working — it catches the 'socket dead but REST login works'
+    bug the single-browser heuristics silently passed. Returns the JSON verdict (chatWorks=received)."""
+    web = repo_dir / "web"
+    src = Path(__file__).resolve().parent.parent / "e2e" / "twoparty_chat.web.mjs"
+    if not web.exists() or not src.exists():
+        return {"error": "no web/ or twoparty_chat script", "chatWorks": False}
+    dst = web / "_twoparty_chat_verify.mjs"
+    dst.write_text(src.read_text())
+    env = {"WEB_URL": web_url, "A_EMAIL": a_email, "B_EMAIL": b_email, "E2E_PASSWORD": password,
+           "NONCE": nonce, "SHOT_DIR": shot_dir}
+    code, out = _run(["node", str(dst)], cwd=str(web), timeout=180, env=env)
+    dst.unlink(missing_ok=True)
+    for line in reversed((out or "").splitlines()):
+        if line.strip().startswith("{"):
+            try:
+                return json.loads(line.strip())
+            except Exception:
+                pass
+    return {"error": "no verdict json", "tail": _tail(out), "chatWorks": False, "exitCode": code}
+
+
+def run_flutter_chat_receive(web_url: str, a_email: str, password: str, cfg: dict, sender_uid: str,
+                             receiver_uid: str, nonce: str, out_png: str, submit: str = "Sign In",
+                             timeout: int = 180) -> dict:
+    """CROSS-PARTY receive proof for a FLUTTER web app (no Node web/ dir). Drives the flt-semantics tree
+    via the shared standalone Playwright (e2e/webdriver): A logs in as the receiver, a peer REST-sends a
+    unique nonce, and A's live Flutter UI must render it. Returns {loggedIn, sdkReady, received, ...}."""
+    wd = Path(__file__).resolve().parent.parent / "e2e" / "webdriver"
+    driver = wd / "flutter_chat_receive.mjs"
+    if not driver.exists() or not (wd / "node_modules").exists():
+        return {"error": "flutter webdriver not set up (run boot/demo once to bootstrap it)",
+                "received": False, "chatWorks": False}
+    env = {"URL": web_url.rstrip("/") + "/", "A_EMAIL": a_email, "A_PASSWORD": password, "SUBMIT": submit,
+           "APP_ID": cfg.get("COMETCHAT_APP_ID", ""), "REGION": cfg.get("COMETCHAT_REGION", "us"),
+           "REST_API_KEY": cfg.get("COMETCHAT_REST_API_KEY", ""), "SENDER_UID": sender_uid,
+           "RECEIVER_UID": receiver_uid, "NONCE": nonce, "OUT": out_png,
+           "PLAYWRIGHT_BROWSERS_PATH": os.path.expanduser("~/Library/Caches/ms-playwright")}
+    code, out = _run(["node", str(driver)], cwd=str(wd), timeout=timeout, env=env)
+    for line in reversed((out or "").splitlines()):
+        if line.strip().startswith("{"):
+            try:
+                return json.loads(line.strip())
+            except Exception:
+                pass
+    return {"error": "no verdict json", "tail": _tail(out), "received": False, "chatWorks": False}
+
+
+def _role_from_email(email: str) -> str:
+    """Map a seeded receiver email to its demo-account quick-fill button label. Maestro can't type into
+    the Flutter Key-based login fields, so login goes through the visible demo-role button; the role is
+    encoded in the seed email local part (jamie.member@… → Member, marco.mod@… → Moderator)."""
+    local = (email or "").split("@")[0].lower()
+    for needle, role in (("admin", "Admin"), ("moderator", "Moderator"), ("mod", "Moderator"),
+                         ("member", "Member"), ("guest", "Guest")):
+        if needle in local:
+            return role
+    return "Member"
+
+
+def run_flutter_chat_receive_mobile(repo_dir: Path, api_url: str, env_file: str, cfg: dict,
+                                    a_email: str, sender_uid: str, receiver_uid: str, nonce: str,
+                                    out_png: str, sender_name: str = "", submit: str = "Sign In",
+                                    settings: dict | None = None, timeout: int = 240) -> dict:
+    """CROSS-PARTY receive proof on the MOBILE Flutter client (android) — CometChat's SDK initialises on
+    android/ios but NOT on Flutter web (shared_preferences MissingPluginException), so the real chat proof
+    lives here. Build+install the integrated apk, REST-send a unique nonce from the peer, then drive
+    Maestro: A logs in (demo-role button), opens Messages, and OPENS the sender's thread. CometChat renders
+    bubbles on a canvas (their text is NOT in the a11y tree, so Maestro can't assert it) — instead we
+    VISION-judge the thread screenshot for the nonce bubble. Catches a dead socket / wrong creds / missing
+    CometChat login (all of which leave the list on 'Oops'). Returns {received, built, sent, shot}."""
+    from lib import providers, vision
+    b = providers.build_install_flutter_android(repo_dir / "app", api_url, env_file, integrated=True)
+    if not b.get("ok"):
+        return {"received": False, "chatWorks": False, "built": False,
+                "error": f"android build/install failed (exit={b.get('buildExit')})", "tail": b.get("tail", "")}
+    # peer B REST-sends the unique nonce to receiver A (persisted; also pushed over A's live socket)
+    sent = cometchat.send_message(cfg, sender_uid, receiver_uid, nonce)
+    role = _role_from_email(a_email)
+    maestro = os.path.expanduser("~/.maestro/bin/maestro")
+    flow = Path(__file__).resolve().parent.parent / "e2e" / "mobile_flows" / "chat_receive.flow.yaml"
+    dev = subprocess.run([mobile.ADB, "devices"], capture_output=True, text=True).stdout
+    serial = next((l.split()[0] for l in dev.splitlines()[1:] if "\tdevice" in l), None)
+    # Maestro AUTO-APPENDS `.png` to the takeScreenshot path — strip our extension so it lands at out_png.
+    maestro_out = out_png[:-4] if out_png.lower().endswith(".png") else out_png
+    args = [maestro, *(["--device", serial] if serial else []), "test", str(flow),
+            "-e", f"APP_ID={b['appId']}", "-e", f"ROLE={role}", "-e", f"SUBMIT={submit}",
+            "-e", f"SENDER={sender_name or 'Chat'}", "-e", f"NONCE={nonce}", "-e", f"OUT={maestro_out}"]
+    env = {**os.environ, "PATH": os.path.expanduser("~/.maestro/bin:") + os.environ.get("PATH", "")}
+    p = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
+    navigated = os.path.exists(out_png) and os.path.getsize(out_png) > 1000
+    # VISION verdict: the nonce bubble must be visibly rendered in A's thread (canvas text Maestro can't read)
+    received, vis = False, {}
+    if navigated:
+        vis = vision.judge_screenshot(
+            out_png,
+            [{"id": "nonce", "check": f"A chat message bubble containing the exact text \"{nonce}\" is visible"}],
+            context="Flutter CometChat conversation thread; proving a cross-party message was received",
+            settings=settings)
+        received = bool(vis.get("overallPass"))
+    return {"received": received, "chatWorks": received, "built": True, "navigated": navigated,
+            "sent": bool(sent), "role": role, "sdkReady": received, "shot": out_png,
+            "visionReason": (vis.get("checks") or [{}])[0].get("reason") if vis else None,
+            "tail": _tail(p.stdout + p.stderr)}
 
 
 def run_twoparty_web(repo_dir: Path, web_url: str, shot_dir: str,
@@ -213,7 +340,8 @@ def run_twoparty_web(repo_dir: Path, web_url: str, shot_dir: str,
 def run_twoparty_mobile(platform: str, call_type: str, web_url: str, shot_dir: str,
                         env_file: str = "", slug: str = "mkt", retries: int = 2,
                         app_id: str | None = None, mobile_email: str | None = None,
-                        web_email: str | None = None, password: str | None = None) -> dict:
+                        web_email: str | None = None, password: str | None = None,
+                        caller_uid: str | None = None) -> dict:
     """Automated mobile↔web call leg (android↔web / ios↔web). Maestro drives the native app, the web
     peer rings it; the leg passes on the SIGNALING verdict — the mobile incoming widget appeared +
     Maestro accepted + CometChat logged the call ANSWERED (server-side, media-independent). Retries
@@ -227,6 +355,7 @@ def run_twoparty_mobile(platform: str, call_type: str, web_url: str, shot_dir: s
     if mobile_email: extra += ["--mobile-email", mobile_email]
     if web_email:    extra += ["--web-email", web_email]
     if password:     extra += ["--password", password]
+    if caller_uid:   extra += ["--caller-uid", caller_uid]
     last = {"error": "no run", "callConnected": False}
     for a in range(retries):
         code, out = _run(["python3", str(script), "--platform", platform, "--direction", "web-calls-mobile",

@@ -8,7 +8,8 @@ agent-native design.
 - **Deterministic (zero-token):** control flow, component expansion, git/branch handling, `gh` repo
   create + push, docker/native build gates, boot/health checks, prompt rendering, gaps aggregation.
 - **LLM (paid, only where judgment is needed):** per-component code generation (`build`/`integrate`)
-  and one adversarial `judge`. Nothing else spends tokens.
+  and a Claude-vision screenshot judge (visual-only checks). The pass/fail VERDICT is deterministic —
+  no LLM adjudicates "did it work". Nothing else spends tokens.
 
 ## Two layers
 - `run_usecase.py` — **stateless worker**: one stage per invocation, exits after each. All state on
@@ -28,8 +29,10 @@ build ─► boot ─🛑CP1─► push-main ─► integrate ─► verify ─�
 - Phase A (`build`) omits skills + docs-mcp (clean baseline). Phase B (`integrate`) adds them.
 - A gate fail exits non-zero → conductor halts (never advances on red). Tag: `agent` for a dead
   baseline, `skills` for a modified system that won't boot / SDK-init fails.
-- `verify` runs a bounded e2e retry (`max_retries`) then an **adversarial judge** that must fail to
-  refute "chat+call works" (defaults to refuted).
+- `verify` computes a **deterministic scorecard** of cross-party machine evidence — a second party
+  actually RECEIVES a unique message (live socket), a two-party call is logged answered server-side,
+  and the CometChat SDK genuinely initialised. `refuted = not(sdkInit ∧ chatReceive ∧ callConnect)`;
+  a Claude-vision FAIL on a call-critical rubric also refutes (`verify.vision_gate`). No LLM judge.
 
 ## Run it
 ```bash

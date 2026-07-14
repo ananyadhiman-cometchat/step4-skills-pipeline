@@ -12,6 +12,7 @@ from pathlib import Path
 MARKERS = {
     "docs-mcp": ["coverageGap:", "staleness:", "docsEscape:"],
     "skills": ["missedTrigger:", "falseTrigger:", "variant:", "hallucination:"],
+    "sdk": ["SDK-gap:"],
 }
 
 
@@ -37,6 +38,7 @@ def rebuild(settings: dict) -> dict:
         f"| docs-mcp | coverageGap / staleness / docsEscape | {counts['coverageGap:']} / {counts['staleness:']} / {counts['docsEscape:']} |",
         f"| skills | missedTrigger / falseTrigger / variant / hallucination | "
         f"{counts['missedTrigger:']} / {counts['falseTrigger:']} / {counts['variant:']} / {counts['hallucination:']} |",
+        f"| sdk | SDK-gap (packaging / behaviour) | {counts['SDK-gap:']} |",
         "", "## Known / expected gaps (pre-seeded)",
         "- **missedTrigger: Vue has no `cometchat-vue` skill** → UC5 (Fintech) & UC10 (Event). "
         "Expect no skill to fire on the Vue web slice — record it, don't treat as agent failure.",

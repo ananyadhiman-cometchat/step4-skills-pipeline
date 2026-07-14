@@ -40,6 +40,9 @@ def read(settings: dict, slug: str, name: str) -> dict | None:
 
 
 def phase_status(settings: dict, slug: str) -> dict:
-    """What's completed on disk for this use case — drives resume + the conductor's view."""
+    """What's completed on disk for this use case — drives resume + the conductor's view. Enumerates
+    ALL 11 stages (was only 6): a resume after build-but-before-containerize was indistinguishable
+    from a completed run, so boot re-ran or was skipped incorrectly (boot needs containerize's output)."""
     return {s: read(settings, slug, s) is not None
-            for s in ["build", "boot", "push-main", "integrate", "verify", "push-branch"]}
+            for s in ["preflight", "provision-app", "build", "containerize", "boot", "demo",
+                      "push-main", "integrate", "verify", "push-branch", "teardown"]}

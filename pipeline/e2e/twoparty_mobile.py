@@ -101,7 +101,7 @@ def _verdict(out: str) -> dict:
 
 def web_calls_mobile(platform, call_type, web_url, shot_dir, env_file="", slug="",
                      app_id=None, mobile_email=None, web_email=None, password=None,
-                     submit="Sign In", home="Messages") -> dict:
+                     submit="Sign In", home="Messages", caller_uid=None) -> dict:
     app_id = app_id or "com.mkt.mobile"                 # per-UC package/bundle (resolved by the caller)
     mobile_email = mobile_email or MOBILE_EMAIL         # the two call-test accounts of THIS use case
     web_email = web_email or WEB_EMAIL
@@ -134,7 +134,7 @@ def web_calls_mobile(platform, call_type, web_url, shot_dir, env_file="", slug="
     finally:
         dst.unlink(missing_ok=True)
     web = _verdict(out)
-    answered = cometchat.call_answered(env_file, slug, since) if (cometchat and env_file) else {"answered": None}
+    answered = cometchat.call_answered(env_file, slug, since, uid=caller_uid) if (cometchat and env_file) else {"answered": None}
     # SIGNALING verdict: the mobile incoming widget appeared + Maestro accepted it + CometChat logged
     # the call ANSWERED. Media-independent → deterministic. DOM/ongoing shots kept only as evidence.
     connected = bool(accept["ok"] and answered.get("answered") is not False)
@@ -159,12 +159,14 @@ def main():
     ap.add_argument("--password", default=None)
     ap.add_argument("--submit", default="Sign In")
     ap.add_argument("--home", default="Messages")
+    ap.add_argument("--caller-uid", default=None)     # the web caller's CometChat uid (server-answered poll)
     args = ap.parse_args()
     if args.direction == "web-calls-mobile":
         res = web_calls_mobile(args.platform, args.call_type, args.web_url, args.shot_dir,
                                env_file=args.env_file, slug=args.slug, app_id=args.app_id,
                                mobile_email=args.mobile_email, web_email=args.web_email,
-                               password=args.password, submit=args.submit, home=args.home)
+                               password=args.password, submit=args.submit, home=args.home,
+                               caller_uid=args.caller_uid)
     else:
         res = {"error": "mobile-calls-web not yet wired"}
     print(json.dumps(res))

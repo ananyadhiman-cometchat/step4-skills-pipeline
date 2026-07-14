@@ -1,0 +1,23 @@
+You are writing the root **README.md** for the `{slug}` use-case repository: **{name}**, a demo application that integrates CometChat (chat + voice/video calling).
+
+## Repository facts (accurate — do not contradict)
+- Components (dir/ (stack, kind)): {layout}
+- Backend: {backend}
+- Web: {web}
+- Mobile/app: {mobile}
+- CometChat: app id + region + keys come from environment/config files, NEVER hardcoded.
+
+## Your task
+Write ONE file: `{repo}/README.md`. Inspect the actual repo (component dirs, `.env.example`, `docker-compose.yml`, package manifests, seed data) so every instruction is TRUE for this repo. Then write a concise, professional README with these sections:
+
+1. **{name}** — 1–2 sentence description of what the app does.
+2. **Architecture** — the components ({layout}) and how they connect (backend REST API + CometChat SDK/UI Kit for chat and calls). A short bullet list.
+3. **CometChat integration** — what is integrated (conversations, message thread, users list / new chat, voice + video calls) and that credentials are injected via env (name the vars, show NO values).
+4. **Getting started** — prerequisites, copying `.env.example` → `.env` (state clearly: do NOT commit real secrets), then the exact commands to run each component that exists in this repo (e.g. `docker compose up -d` for the backend, `npm install && npm run dev` for web, `flutter run` for the app). Only list components that actually exist.
+5. **Demo accounts** — if the repo seeds demo users/roles, list the roles and how to log in (do not print real passwords if they are secrets; reference the seed password convention).
+6. **Notes** — anything a developer must know (e.g. calls need real devices to fully connect; mobile emulator host mapping).
+
+## Hard rules
+- Write ONLY `{repo}/README.md`. Do NOT modify, create, or delete any other file.
+- NEVER include secret values (API keys, auth tokens, REST keys, passwords). Reference env var names only.
+- Keep it accurate and concise (roughly 60–120 lines of Markdown). No invented features.

@@ -11,6 +11,17 @@ Requirements:
 - Namespace every UID/GUID with "{slug}-". Map RBAC roles → CometChat tags/groups.
 - Minimal, idiomatic diff. No unrelated refactors. NO secrets committed (keys in env only).
 - Do NOT run git or push — the harness commits locally on the branch.
+- **CALLING (if calls are in scope): a call BUTTON alone is INERT — placing `CometChatCallButtons` (or the
+  header's call buttons) without its prerequisites is a SILENT no-op the compile gate will NOT catch.**
+  Consult the per-stack calls skill and follow its setup rules IN FULL. Two things are always required:
+  1. **Initialize the calling module.** Flutter v6: `..enableCalls = true` on `UIKitSettingsBuilder` AND
+     `CometChatUIKitCalls.init(appId, region)` INSIDE the chat-init `onSuccess` (rules 1.0 + 1.1). RN/native:
+     the equivalent `CometChatCalls.init` / calls-enable from that stack's calls skill.
+  2. **Give the kit a navigator/host to PRESENT the call screen**, or `initiateCall` succeeds but nothing
+     renders. Flutter v6: set `MaterialApp.navigatorKey = CallNavigationContext.navigatorKey` — and if the
+     app uses `MaterialApp.router`/go_router (where you can't set navigatorKey on MaterialApp), make
+     go_router's ROOT navigatorKey BE `CallNavigationContext.navigatorKey`. Web/native: mount the
+     ongoing/incoming-call host per the calls skill.
 
 GAP LOG (required, append to {gaps_file}) — use these EXACT markers, one per line, so the tracker counts them:
   "## {name} ({slug}) — {comp}"
@@ -18,10 +29,15 @@ GAP LOG (required, append to {gaps_file}) — use these EXACT markers, one per l
   skills:    "missedTrigger: <platform/version>" | "falseTrigger: <skill>" | "variant: chose <x> want <y>" | "hallucination: <API/class/prop that does not exist>"
   If this slice had zero gaps, write "- none".
 
-E2E (the fixed flow — so verify has runtime proof):
-- WEB: extend e2e/chatcall.spec.ts (Playwright) to run login → open conversation → send message → start call.
-- MOBILE/native: extend e2e/chatcall.flow.yaml (Maestro) for the same flow.
-- These must exercise the REAL CometChat UI, not mocks — verify runs them and an adversarial judge refutes if there's no runtime proof.
+E2E CONTRACT (the harness owns the tests — you must expose the hooks they drive):
+- The pipeline runs its OWN deterministic e2e (cross-party message receive + two-party call), NOT an
+  app-authored spec. Do NOT hand-write chatcall.spec.ts / chatcall.flow.yaml — they are ignored.
+- Instead, GUARANTEE the harness can drive the real CometChat UI: the login screen MUST expose the
+  testids `email-input` / `password-input` / `login-submit`; a route `/conversations` MUST render the
+  kit's `CometChatConversations`; the composer + send button MUST be the kit's real components; call
+  buttons MUST be the kit's `CometChatCallButtons`. The verdict is deterministic machine evidence
+  (a second party actually RECEIVES a unique message; a call is logged answered server-side) — there
+  is no LLM judge, so missing/renamed hooks read as a real failure.
 
 Return a short JSON at the end: {{"component":"{comp}","featureCompleteness":<0-1>,"notes":"..."}}.
 The harness runs the compile gate and records telemetry.

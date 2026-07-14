@@ -15,7 +15,7 @@ Usage:  python3 batch_runner.py                 # all waves, interactive
         python3 batch_runner.py --auto-approve   # CI/unattended (skips the human gate — dangerous)
 """
 from __future__ import annotations
-import argparse, json, subprocess, sys
+import argparse, json, os, subprocess, sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -34,7 +34,9 @@ KNOWN = {u["slug"] for u in CFG["use_cases"]}
 # from the integration branch and gates on that build compiling (see stage_demo) before CP2.
 SEG_A = ["preflight", "build", "containerize", "boot", "demo"]   # → CHECKPOINT 1 (manual verify)
 SEG_B = ["push-main", "integrate", "verify", "demo"]             # push-main = auto-push on CP1 → CHECKPOINT 2
-SEG_C = ["push-branch"]                                          # push-branch = auto-push on CP2
+SEG_C = ["readme", "push-branch"]                                # readme (commit) then auto-push on CP2
+# After SEG_C the wave ALWAYS runs a final `teardown` — the automatic last step: README shipped,
+# then everything is cleaned up (docker down -v, apps uninstalled, sims/emulator shut).
 
 
 def run(slug, stage) -> int:
@@ -60,9 +62,17 @@ def checkpoint(label, slugs, auto) -> bool:
 
 
 def drive_wave(wave, auto):
+    # FAIL LOUD on a mistyped/removed slug — silently dropping it (the old behaviour) meant a wave
+    # believed to run 2 use cases actually ran 1, and aggregate metrics under-counted with no signal.
+    unknown = [s for s in wave if s not in KNOWN]
+    if unknown:
+        print(f"\033[31m✗ wave {wave} names UNKNOWN slug(s) {unknown} — fix use_cases.json waves. Aborting.\033[0m",
+              file=sys.stderr)
+        sys.exit(3)
     slugs = [s for s in wave if s in KNOWN]
     if not slugs:
-        print(f"(skipping wave {wave} — no known slugs; already-done use cases feed aggregate only)"); return
+        print(f"(skipping empty wave {wave})"); return
+    os.environ["STEP4_WAVE_ID"] = "wave-" + "-".join(slugs)   # correlate all stages of this wave
     # Segment A for both, then CP1, then B for both, then CP2, then C.
     for s in slugs:
         if not run_segment(s, SEG_A):
@@ -80,7 +90,11 @@ def drive_wave(wave, auto):
         run(s, "teardown")
     for s in slugs:
         run_segment(s, SEG_C)
-    print(f"\n\033[32m✔ wave complete: {', '.join(slugs)}\033[0m")
+    # FINAL step — always cleanup at the end of the pipeline (apps + containers + sims), even if a
+    # push-branch gate tripped, so a wave never leaves demo apps installed or docker running.
+    for s in slugs:
+        run(s, "teardown")
+    print(f"\n\033[32m✔ wave complete (README shipped, cleaned up): {', '.join(slugs)}\033[0m")
 
 
 def main():

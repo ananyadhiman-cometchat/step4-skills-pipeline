@@ -1,15 +1,17 @@
-"""shotreview — run BOTH screenshot layers over a set of shots and emit a self-contained gallery.
+"""shotreview — Claude-vision rubric judging over a set of shots + a self-contained HTML gallery.
 
-  vision.judge          → "is it correct?"  (Claude-vision rubric pass/fail)
-  visual_baseline.compare → "did it change?" (perceptual baseline diff)
+  vision.judge  → "is it correct?"  (Claude-vision rubric pass/fail per check)
 
-Produces a manifest + a single self-contained HTML gallery (images inlined as base64) so CP1/CP2
-review is one page. Returns a summary the verify/demo stages fold into their verdict.
+(The perceptual-baseline "did it change?" layer was removed: on live fake-media call frames it
+flagged CHANGED every run, fed no gate, and only trained reviewers to ignore the ⚠.)
+
+Produces a single self-contained HTML gallery (images inlined as base64) so CP1/CP2 review is one
+page, plus a compact machine summary the verify/demo stages fold into their verdict.
 """
 from __future__ import annotations
 import base64, html, json
 from pathlib import Path
-from lib import vision, visual_baseline
+from lib import vision
 
 
 def _b64(p: Path) -> str:
@@ -56,10 +58,9 @@ def review(shots: list[dict], slug: str, settings: dict, out_html: str,
     for s in shots:
         v = vision.judge(s["path"], s.get("rubric", "app_alive"), s.get("context", s["name"]), settings) \
             if Path(s["path"]).exists() else {"ok": False, "overallPass": False, "error": "missing shot", "checks": []}
-        bl = visual_baseline.compare(s["path"], s["name"], baselines_dir, slug, backend=baseline_backend)
-        results.append({**s, "vision": v, "baseline": bl})
+        results.append({**s, "vision": v, "baseline": {}})
     allCorrect = all(r["vision"].get("overallPass") for r in results) if results else False
-    anyChanged = any(r["baseline"].get("changed") for r in results)
+    anyChanged = False   # perceptual baseline removed: flaky on live fake-media call frames, gated nothing
     body = "".join(_card(r) for r in results)
     Path(out_html).parent.mkdir(parents=True, exist_ok=True)
     Path(out_html).write_text(

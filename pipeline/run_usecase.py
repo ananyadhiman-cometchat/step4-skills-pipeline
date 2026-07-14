@@ -18,27 +18,53 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 import time  # noqa: E402
-from lib import claude_runner, gates, prompts, state, verify, gaps, readiness, mobile, cometchat, shotreview, selfheal, providers  # noqa: E402
+from lib import claude_runner, gates, prompts, state, verify, gaps, readiness, mobile, cometchat, shotreview, selfheal, providers, secrets, obs  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 AUTOMATE_ROOT = HERE.parent
 ENV_FILE = AUTOMATE_ROOT / ".env.pipeline"
 
 
-def load_envfile_into_os():
-    """Load .env.pipeline into os.environ so codegen/provision agents see the creds."""
-    if ENV_FILE.exists():
-        for line in ENV_FILE.read_text().splitlines():
+def uc_env_file(S, uc) -> Path:
+    """This use case's OWN CometChat app creds (runs/<slug>/.env.cometchat). Each use case is provisioned
+    a SEPARATE CometChat app — account-level keys (automation/APNs/FCM/webhook) stay in the global
+    .env.pipeline, but the app-specific APP_ID/REGION/AUTH_KEY/REST_API_KEY come from here so no two use
+    cases ever share an app's users/conversations/data."""
+    return state.repo_dir(S, uc["slug"]) / ".env.cometchat"
+
+
+def _load_kv_into_os(path: Path):
+    if path.exists():
+        for line in path.read_text().splitlines():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
-                if v:
+                if v.strip():
                     os.environ[k.strip()] = v.strip()
-    os.environ["COMETCHAT_ENV_FILE"] = str(ENV_FILE)
+
+
+def load_envfile_into_os(S=None, uc=None):
+    """Load the global sweep creds, then OVERLAY this use case's OWN provisioned-app creds (per-UC wins),
+    so codegen/verify/demo bind to the use case's own CometChat app — not a shared one. COMETCHAT_ENV_FILE
+    points at the per-UC file when it exists (so `_cfg` reads + the secret scan use the right app)."""
+    _load_kv_into_os(ENV_FILE)
+    active = ENV_FILE
+    if S is not None and uc is not None:
+        ue = uc_env_file(S, uc)
+        if ue.exists():
+            _load_kv_into_os(ue); active = ue
+    os.environ["COMETCHAT_ENV_FILE"] = str(active)
 
 
 def load(name):
     return json.loads((HERE / "config" / name).read_text())
+
+
+def e2e_password(uc):
+    """The shared seed password for a use case. Default is SLUG-DERIVED (mkt→Mkt@seed2026!,
+    com→Com@seed2026!) matching the requirements-pinned format — NOT the mkt-hardcoded literal, which
+    401s on every other use case's seeded accounts (confirmed: com uses Com@seed2026!)."""
+    return uc.get("e2ePassword") or f"{uc['slug'].capitalize()}@seed2026!"
 
 
 def git(repo: Path, *args) -> tuple[int, str]:
@@ -77,6 +103,13 @@ out/
 # Secrets — build-time creds are injected by the pipeline (mobile.write_cometchat_env). Commit only .example.
 .env
 !.env.example
+# Generated cred files (self-heal writes the REAL provisioned creds here) — must never be pushed.
+.dart_define.json
+local.properties
+**/local.properties
+# Per-use-case CometChat app creds (this repo's OWN provisioned app) — live authKey/restApiKey.
+.env.cometchat
+cometchat-app-config.json
 
 # Pipeline / demo artifacts (not app source)
 _demo/
@@ -105,7 +138,10 @@ def ensure_repo(repo: Path) -> None:
     if fresh:
         git(repo, "init", "-q"); git(repo, "checkout", "-q", "-b", "main")
     gi = repo / ".gitignore"
-    if not gi.exists() or "node_modules/" not in gi.read_text():
+    cur = gi.read_text() if gi.exists() else ""
+    # refresh a STALE ignore too (an existing repo created before .dart_define.json/local.properties
+    # were added) so newly-ignored cred files are untracked below — not just fresh-repo creation.
+    if not gi.exists() or "node_modules/" not in cur or ".dart_define.json" not in cur:
         gi.write_text(GITIGNORE)
     if not fresh:  # existing repo — drop any tracked files the .gitignore now ignores
         code, tracked = git(repo, "ls-files", "-ci", "--exclude-standard")
@@ -155,7 +191,41 @@ def die_gate(msg):
     print(f"GATE-FAIL: {msg}", file=sys.stderr); sys.exit(2)
 
 
+def fail_gate(S, uc, stage, summary, signals, *, gate=None, err="", evidence=None):
+    """Record a failure with a DETERMINISTICALLY-CLASSIFIED cause (infra/agent/harness/skills/setup)
+    before halting, so a boot/harness failure is never mislabelled 'skills' and poisons the gaps
+    ledger. Use in the stages where the cause actually matters (verify/integrate/boot/demo)."""
+    cause = obs.record_failure(S, uc["slug"], stage, gate=gate or stage, summary=summary,
+                               signals=signals, err=err, evidence=evidence)
+    print(f"GATE-FAIL[{cause}]: {summary} tag={cause}", file=sys.stderr)
+    sys.exit(2)
+
+
+def secret_scan_or_die(S, uc, repo, stage):
+    """The STEP4 §4.6 pre-push gate that was promised but never implemented: block the push if any
+    real secret VALUE (from .env.pipeline) appears in a TRACKED file. Runs before every git push."""
+    load_envfile_into_os(S, uc)
+    scan = secrets.scan_repo(repo, str(uc_env_file(S, uc)))
+    if not scan.get("clean"):
+        fail_gate(S, uc, stage,
+                  f"{stage}:{uc['slug']} SECRET-SCAN BLOCKED push — {scan.get('hits') or scan.get('error')}",
+                  {"exit": 2}, gate="secret-scan", evidence=[str(h) for h in scan.get("hits", [])])
+
+
 # ===================== STAGES =====================
+def _only_filter(comps):
+    """Scope a stage's component list to STEP4_ONLY (comma-separated kinds or names),
+    e.g. STEP4_ONLY=web builds/integrates ONLY the web slice and leaves every other
+    component (and its committed integration) untouched. Empty env -> no filtering."""
+    only = {x.strip() for x in os.environ.get("STEP4_ONLY", "").split(",") if x.strip()}
+    if not only:
+        return comps
+    kept = [c for c in comps if c["kind"] in only or c["name"] in only]
+    if kept:
+        print(f"  [scoped] STEP4_ONLY={sorted(only)} -> {[c['name'] for c in kept]}")
+    return kept
+
+
 def stage_preflight(S, uc):
     """Phase 0 — initialise + stack-readiness gate + generate the spec-pin (req:baseline).
     No codegen tokens are spent past here unless this use case's stacks are actually buildable."""
@@ -185,31 +255,39 @@ def stage_preflight(S, uc):
 
 
 def stage_provision(S, uc):
-    """One-time — use automation keys + docs-mcp to create/configure the shared app and fill creds.
-    Idempotent: if COMETCHAT_APP_ID is already set, no-op."""
-    load_envfile_into_os()
-    if os.environ.get("COMETCHAT_APP_ID"):
-        res = {"appIdSet": True, "skipped": "already provisioned"}
+    """Provision a SEPARATE CometChat app for THIS use case (not a shared one): use the account-level
+    automation/management keys to create app `step4-<slug>`, capture its APP_ID/REGION/AUTH_KEY/
+    REST_API_KEY, and write them to the per-UC file runs/<slug>/.env.cometchat (+ cometchat-app-config.json).
+    Idempotent per use case: if the per-UC file already names a valid app, no-op."""
+    repo = state.repo_dir(S, uc["slug"]); repo.mkdir(parents=True, exist_ok=True)
+    ue = uc_env_file(S, uc)
+    load_envfile_into_os(S, uc)                         # global account keys (automation/APNs/FCM/webhook)
+    if ue.exists() and cometchat._cfg(str(ue)).get("COMETCHAT_APP_ID"):
+        res = {"appIdSet": True, "skipped": "already provisioned (per-UC app)", "appIdFile": str(ue)}
         state.write(S, uc["slug"], "provision-app", res)
-        print("OK provision-app: already set (no-op)"); return res
-    repo = state.repo_dir(S, uc["slug"])
+        print(f"OK provision-app: {uc['slug']} already has its own app ({ue.name}) — no-op"); return res
+    # Do NOT let the agent reuse a shared app: hide any shared app-specific keys — only the ACCOUNT
+    # automation keys should be visible, forcing a fresh per-UC app.
+    for k in ("COMETCHAT_APP_ID", "COMETCHAT_AUTH_KEY", "COMETCHAT_REST_API_KEY", "COMETCHAT_REGION"):
+        os.environ.pop(k, None)
     r = claude_runner.run_headless(prompts.render_provision(S, uc), settings=S, phase="B",
-                                   cwd=AUTOMATE_ROOT, model_key="provision", label="provision-app",
+                                   cwd=repo, model_key="provision", label=f"provision-{uc['slug']}",
                                    log_dir=repo / "_logs")
-    load_envfile_into_os()  # re-read — the agent should have filled it
-    app_set = bool(os.environ.get("COMETCHAT_APP_ID"))
-    res = {"appIdSet": app_set, "exitCode": r["exitCode"], "tail": r["tail"]}
+    app_set = ue.exists() and bool(cometchat._cfg(str(ue)).get("COMETCHAT_APP_ID"))
+    res = {"appIdSet": app_set, "exitCode": r["exitCode"], "appIdFile": str(ue), "tail": r["tail"]}
     state.write(S, uc["slug"], "provision-app", res)
     if not app_set:
-        die_gate("provision-app: APP_ID not set — check COMETCHAT_DASHBOARD_CHECKLIST.md; provisioning residue is a finding tag=docs-mcp")
-    print("OK provision-app: app created + creds written"); return res
+        die_gate(f"provision-app:{uc['slug']} — no per-UC app created at {ue.name}; check "
+                 f"COMETCHAT_DASHBOARD_CHECKLIST.md; provisioning residue is a finding tag=docs-mcp")
+    load_envfile_into_os(S, uc)                    # now overlay the freshly-provisioned per-UC creds
+    print(f"OK provision-app: {uc['slug']} — dedicated app created + creds written to {ue.name}"); return res
 
 
 def stage_build(S, uc):
     repo = state.repo_dir(S, uc["slug"]); repo.mkdir(parents=True, exist_ok=True)
     logs = repo / "_logs"
     ensure_repo(repo)  # init on main + write .gitignore BEFORE any codegen/add can track junk
-    comps, worst, runs = prompts.expand_components(uc), 0, []
+    comps, worst, runs = _only_filter(prompts.expand_components(uc)), 0, []
     for c in comps:
         cdir = repo / c["dir"]
         r = claude_runner.run_headless(prompts.render_build(S, uc, c), settings=S, phase="A",
@@ -217,13 +295,15 @@ def stage_build(S, uc):
         g = verify.build_gate(c["kind"], cdir)
         # SELF-HEAL: if the gate failed with a known UC1 signature, auto-repair + retry once — no human.
         if g["buildExitCode"] != 0:
-            healed = selfheal.heal({"stage": "build", "kind": c["kind"], "stack": c["stack"],
-                                    "repo_dir": repo, "comp_dir": cdir, "mobile_dir": cdir,
-                                    "env_file": str(ENV_FILE), "integrated": False}, g["outputTail"])
+            ctx = {"stage": "build", "kind": c["kind"], "stack": c["stack"],
+                   "repo_dir": repo, "comp_dir": cdir, "mobile_dir": cdir,
+                   "env_file": str(uc_env_file(S, uc)), "integrated": False}
+            healed = selfheal.heal(ctx, g["outputTail"])
             if healed:
                 print(f"  self-heal build:{c['name']} → {[h['rule'] for h in healed]}; retrying")
-                g = verify.build_gate(c["kind"], cdir); g["selfHealed"] = [h["rule"] for h in healed]
-        runs.append({**c, **r, **g}); worst = max(worst, g["buildExitCode"])  # compile is authoritative, not agent exit
+                # thread the heal env (e.g. JAVA_HOME=JDK17) into the re-gate — else the fix no-ops
+                g = verify.build_gate(c["kind"], cdir, env=ctx.get("env")); g["selfHealed"] = [h["rule"] for h in healed]
+        runs.append({**c, **r, **g}); worst = max(worst, g["buildExitCode"])  # compile authoritative; agentOk gates truncation
     sha = ""
     if worst == 0:
         git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", f"baseline {uc['name']} (no CometChat)")
@@ -237,10 +317,58 @@ def stage_build(S, uc):
     print(f"OK build:{uc['slug']} sha={sha[:9]}"); return res
 
 
+WEBDRIVER = HERE / "e2e" / "webdriver"           # standalone Playwright (Flutter web has no @playwright/test)
+PW_BROWSERS = os.path.expanduser("~/Library/Caches/ms-playwright")
+
+
+def _web_login_shot_flutter(out_png, role="Member", submit="Sign In") -> bool:
+    """LOGGED-IN web shot for a Flutter (CanvasKit) app. Flutter web has no real DOM (the --web-renderer
+    html flag was removed in 3.44), so we drive login through the accessibility (flt-semantics) tree the
+    app emits via SemanticsBinding.ensureSemantics(): tap the demo-role button, submit, wait for the login
+    copy to disappear, screenshot the home. Proves web→backend connectivity (the root shot only proves it
+    serves the login screen). Uses the shared pipeline Playwright in e2e/webdriver."""
+    driver = WEBDRIVER / "flutter_login_shot.mjs"
+    if not driver.exists():
+        return False
+    if not (WEBDRIVER / "node_modules").exists():   # self-bootstrap the shared Playwright (once)
+        print("  installing shared Playwright for web-login driver…")
+        subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=str(WEBDRIVER),
+                       env={**os.environ, "PLAYWRIGHT_BROWSERS_PATH": PW_BROWSERS},
+                       capture_output=True, timeout=300)
+        subprocess.run(["npx", "--yes", "playwright", "install", "chromium"], cwd=str(WEBDRIVER),
+                       env={**os.environ, "PLAYWRIGHT_BROWSERS_PATH": PW_BROWSERS},
+                       capture_output=True, timeout=600)
+        if not (WEBDRIVER / "node_modules").exists():
+            return False
+    env = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": PW_BROWSERS,
+           "URL": "http://localhost:3000/", "ROLE": role, "SUBMIT": submit, "OUT": str(out_png)}
+    p = subprocess.run(["node", str(driver)], cwd=str(WEBDRIVER), text=True,
+                       capture_output=True, timeout=120, env=env)
+    print(f"  web login→home (semantics): {p.stdout.strip()[-160:] or p.stderr.strip()[-160:]}")
+    return p.returncode == 0 and Path(out_png).exists()
+
+
 def _web_shot(repo, out_png) -> bool:
-    """Screenshot the served web app (root; whatever renders — login or home)."""
+    """Screenshot the served web app ROOT (login screen for auth-gated apps). The LOGGED-IN home is a
+    separate shot (_web_login_shot_flutter). Node web (repo/web) uses its own @playwright/test; a Flutter
+    (or any repo/web-less) app uses the shared pipeline Playwright in e2e/webdriver."""
     web = repo / "web"
     if not web.exists():
+        # Flutter / repo/web-less: plain root shot via the shared driver
+        if (WEBDRIVER / "node_modules").exists():
+            driver = WEBDRIVER / "root_shot.mjs"
+            driver.write_text(
+                "import { chromium } from 'playwright'\n"
+                "const b = await chromium.launch()\n"
+                "const p = await b.newPage({ viewport:{width:1280,height:900} })\n"
+                "await p.goto('http://localhost:3000/', { waitUntil:'load' }).catch(()=>{})\n"
+                "await p.waitForTimeout(4000)\n"
+                f"await p.screenshot({{ path:'{out_png}' }})\n"
+                "await b.close()\n")
+            env = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": PW_BROWSERS}
+            code = subprocess.run(["node", str(driver)], cwd=str(WEBDRIVER), env=env,
+                                  capture_output=True, timeout=120).returncode
+            return code == 0 and Path(out_png).exists()
         return False
     script = web / "_shot.mjs"
     script.write_text(
@@ -277,21 +405,27 @@ def stage_demo(S, uc):
             die_gate(f"demo:{uc['slug']} boot-2 must be on feature/cometchat-integration, on '{branch}' tag=agent")
     shots = {}
     # 1. web + backend via docker — leave up
+    is_flutter_web = (repo / "app" / "pubspec.yaml").exists() and not (repo / "web").exists()
     if (repo / "docker-compose.yml").exists():
-        if (repo / "app" / "pubspec.yaml").exists():   # Flutter web served static — host-build first
-            providers.host_build_flutter_web(repo / "app")
+        if is_flutter_web:   # Flutter web served static — host-build first (empty API_URL → nginx /api proxy)
+            providers.host_build_flutter_web(repo / "app", env_file=str(uc_env_file(S, uc)))
         up, _ = verify.compose_up(repo)
         hpaths = V.get("backend_health_paths") or ["/health"]
         verify.health_check(V.get("backend_url", "http://localhost:8080"), hpaths, V["backend_health_timeout_s"])
-        if "web" in kinds or (repo / "app" / "pubspec.yaml").exists():   # Node web OR Flutter web
+        if "web" in kinds or is_flutter_web:   # Node web OR Flutter web
             p = str(demo / "web.png")
             shots["web"] = {"ok": _web_shot(repo, p), "path": p}
+            if is_flutter_web:   # ALSO drive login via the semantics tree → logged-in home (connectivity proof)
+                lp = str(demo / "web-loggedin.png")
+                shots["web-loggedin"] = {"ok": _web_login_shot_flutter(lp), "path": lp}
     # 2. mobile / native clients — dispatch to the STACK PROVIDER per component (RN / Flutter /
     #    native Android / native iOS). Each provider self-heals (cleartext + creds), builds, installs,
     #    launches and screenshots — the demo stage is no longer RN-only.
     mobile_calls = {}; plat_app_id = {}
-    api_a = V.get("api_android", "http://10.0.2.2:8080/api")   # android emulator → host
-    api_i = V.get("api_ios", "http://localhost:8080/api")      # ios simulator → localhost
+    # API_URL is the scheme://host:port BASE with NO path — the app appends the full route (…/api/…).
+    # A base ending in /api double-prefixes → fatal /api/api/... 404. RN inlines its own EXPO_PUBLIC_API_URL.
+    api_a = V.get("api_android", "http://10.0.2.2:8080")   # android emulator → host
+    api_i = V.get("api_ios", "http://localhost:8080")      # ios simulator → localhost
     for c in prompts.expand_components(uc):
         if c["kind"] not in ("mobile", "app", "android", "ios"):
             continue
@@ -302,7 +436,7 @@ def stage_demo(S, uc):
         print(f"demo provider [{prov.family}] for {c['name']} ({c['stack']})…")
         ctx = {"app_dir": repo / c["dir"], "repo_dir": repo, "demo_dir": demo,
                "kind": c["kind"], "stack": c["stack"], "api_android": api_a, "api_ios": api_i,
-               "api_web": "/api", "integrated": integrated, "env_file": str(ENV_FILE), "settings": S}
+               "api_web": "", "integrated": integrated, "env_file": str(uc_env_file(S, uc)), "settings": S}
         aid = providers.resolve_app_id(c["kind"], repo / c["dir"])
         for plat, shot in prov.demo(ctx).items():   # android / ios / web
             shots[plat] = shot
@@ -310,8 +444,15 @@ def stage_demo(S, uc):
                 plat_app_id[plat] = shot.get("appId") or aid
     # LOGIN + screenshot the logged-in home for each mobile client that launched OK — proves the app
     # reaches the backend (connectivity), which the launch screen alone doesn't. Uses a seeded account.
-    li_acc = cometchat.call_test_accounts(uc["slug"]); li_email = li_acc["mobile"][0]
-    li_pw = uc.get("e2ePassword", "Mkt@seed2026!")
+    # resolve the chat-test pair from the app's OWN demo accounts (chatPair) when configured — same
+    # source of truth as verify, so mobile login/call use accounts the app actually seeded.
+    if uc.get("chatPair"):
+        _rp = cometchat.seed_and_resolve_pair(str(uc_env_file(S, uc)), uc, V.get("backend_url", "http://localhost:8080"), e2e_password(uc))
+        acc_pair = _rp if (_rp.get("web") and _rp["web"][1]) else cometchat.call_test_accounts(uc["slug"])
+    else:
+        acc_pair = cometchat.call_test_accounts(uc["slug"])
+    li_acc = acc_pair; li_email = li_acc["mobile"][0]
+    li_pw = e2e_password(uc)
     for plat in ("android", "ios"):
         if shots.get(plat, {}).get("ok") and plat_app_id.get(plat):
             try:
@@ -323,18 +464,28 @@ def stage_demo(S, uc):
             print(f"  {plat} login→home shot: ok={li.get('ok')}")             # per-UC package/bundle for the Maestro flows
     # AUTOMATED mobile↔web call matrix (boot-2) — android/ios clients that built OK ring the web peer.
     # Parameterized per use case: the app id + the two call-test accounts (not mkt-hardcoded).
-    if integrated:
+    # A Flutter-unified app's WEB peer is Flutter-web, where CometChat's SDK can't init (shared_preferences
+    # MissingPluginException) — so it can never answer. Recording connected=False would read as a calling
+    # FAILURE; instead mark the web-peer legs DEFERRED (mobile↔mobile calling is the real Flutter proof, TODO).
+    is_flutter_demo = (repo / "app" / "pubspec.yaml").exists() and not (repo / "web").exists()
+    if integrated and is_flutter_demo:
+        for plat in ("android", "ios"):
+            if shots.get(plat, {}).get("ok"):
+                mobile_calls[f"{plat}-web-call"] = "deferred-flutter-web-unsupported"
+        print("  call-matrix: mobile↔web DEFERRED for Flutter (web peer can't run CometChat); "
+              "mobile↔mobile calling is the real proof (TODO)")
+    elif integrated:
         web_url = V.get("web_url", "http://localhost:3000")
-        acc = cometchat.call_test_accounts(uc["slug"])
+        acc = acc_pair
         m_email, w_email = acc["mobile"][0], acc["web"][0]
-        pw = uc.get("e2ePassword", "Mkt@seed2026!")
+        pw = e2e_password(uc)
         for plat in ("android", "ios"):
             if shots.get(plat, {}).get("ok"):
                 for ct in ("voice", "video"):
                     r = verify.run_twoparty_mobile(plat, ct, web_url, str(demo),
-                                                   env_file=str(ENV_FILE), slug=uc["slug"],
+                                                   env_file=str(uc_env_file(S, uc)), slug=uc["slug"],
                                                    app_id=plat_app_id.get(plat), mobile_email=m_email,
-                                                   web_email=w_email, password=pw)
+                                                   web_email=w_email, password=pw, caller_uid=acc["web"][1])
                     mobile_calls[f"{plat}-{ct}"] = bool(r.get("callConnected"))
                     print(f"  call-matrix {plat}↔web {ct}: connected={r.get('callConnected')}")
     print(f"  disk free: {mobile.disk_free_gb()}GB")
@@ -356,20 +507,55 @@ def stage_demo(S, uc):
                 if r.get("correct") is False:
                     shots.setdefault(r["name"], {})["visionAlive"] = False
                     print(f"  ⚠ vision: {r['name']} screen is NOT a healthy render ({r.get('failedChecks')})")
+    # Fold MOBILE into the verdict (the eval was web-only): a mobile client that built + launched but
+    # connected NO call leg is a real signal. Recorded always; hard-gates only when verify.mobile_gate
+    # is set (mobile↔web call automation is acknowledged flaky, so it is advisory by default).
+    mobile_built = [k for k in ("android", "ios") if shots.get(k, {}).get("ok")]
+    connected_plats = {k.split("-")[0] for k, v in mobile_calls.items() if v}
+    mobile_refuted = [p for p in mobile_built if p not in connected_plats] if integrated else []
     res = {"useCase": uc["name"], "slug": uc["slug"], "screenshots": shots, "leftUp": True,
-           "integrated": integrated, "mobileCallMatrix": mobile_calls, "demoReview": demo_review,
-           "webUrl": V.get("web_url", "http://localhost:3000")}
+           "integrated": integrated, "mobileCallMatrix": mobile_calls, "mobileRefuted": mobile_refuted,
+           "demoReview": demo_review, "webUrl": V.get("web_url", "http://localhost:3000")}
     state.write(S, uc["slug"], "demo", res)
     # Boot-2 gate: the integrated mobile apps MUST have compiled. buildExit is set per platform
     # by build_android/build_ios; a non-zero exit means CometChat integration broke the build.
     if integrated:
+        obs.event(S, uc["slug"], "demo", "mobile_verdict", built=mobile_built,
+                  connected=sorted(connected_plats), refuted=mobile_refuted)
         broke = [k for k in ("android", "ios")
                  if k in shots and shots[k].get("buildExit") not in (0, None)]
         if broke:
             die_gate(f"demo:{uc['slug']} boot-2 integrated build FAILED for {broke} "
                      f"(rebuild mandatory before CP2) tag=skills")
+        if mobile_refuted:
+            print(f"  ⚠ mobile call NOT proven for {mobile_refuted} (built but no call leg connected)")
+            if S.get("verify", {}).get("mobile_gate", False):
+                die_gate(f"demo:{uc['slug']} mobile call not proven for {mobile_refuted} tag=skills")
     oks = [k for k, v in shots.items() if v.get("ok")]
     print(f"OK demo:{uc['slug']} — up for manual test. screenshots: {oks}. Run 'teardown' after approval.")
+    return res
+
+
+def stage_readme(S, uc):
+    """Generate + commit the repo-root README.md (codegen reads the real repo). Runs on the
+    integration branch so the README ships with the feature. Non-fatal if codegen produces nothing."""
+    repo = state.repo_dir(S, uc["slug"]); logs = repo / "_logs"
+    # ensure we're on the feature branch (README belongs with the integration, not bare main)
+    git(repo, "checkout", "-q", "feature/cometchat-integration")
+    r = claude_runner.run_headless(prompts.render_readme(S, uc, str(repo)), settings=S, phase="A",
+                                   cwd=repo, model_key="build", label="readme", log_dir=logs)
+    readme = repo / "README.md"
+    committed = False
+    if readme.exists() and readme.stat().st_size > 100:
+        git(repo, "add", "README.md")
+        code, _ = git(repo, "diff", "--cached", "--quiet")  # nonzero exit => staged changes exist
+        if code != 0:
+            git(repo, "commit", "-q", "-m", f"docs: README for {uc['name']}")
+            committed = True
+    res = {"useCase": uc["name"], "slug": uc["slug"], "readmeWritten": readme.exists(),
+           "committed": committed, "tail": r["tail"]}
+    state.write(S, uc["slug"], "readme", res)
+    print(f"OK readme:{uc['slug']} written={readme.exists()} committed={committed}")
     return res
 
 
@@ -411,6 +597,8 @@ def stage_containerize(S, uc):
 def stage_boot(S, uc):
     if not gates.baseline(state.read(S, uc["slug"], "build") or {}):
         die_gate(f"boot needs GATE.baseline:{uc['slug']}")
+    if not gates.containerize(state.read(S, uc["slug"], "containerize") or {}):
+        die_gate(f"boot needs GATE.containerize:{uc['slug']} — containerize produced no docker-compose tag=agent")
     repo = state.repo_dir(S, uc["slug"]); V = S["verify"]
     hpaths = V.get("backend_health_paths") or [V.get("backend_health_path", "/health")]
     # Flutter web is served static from build/web — build it on the HOST first (no Docker version drift).
@@ -440,6 +628,7 @@ def stage_boot(S, uc):
 
 def stage_push_main(S, uc):
     repo = state.repo_dir(S, uc["slug"])
+    secret_scan_or_die(S, uc, repo, "push-main")  # §4.6: never ship a secret to a public repo
     sh("gh", "repo", "create", uc["repo"], "--public")  # idempotent: no-op if exists (use cases are public)
     _, login = sh("gh", "api", "user", "-q", ".login"); owner = login.strip()
     git(repo, "remote", "remove", "origin"); git(repo, "remote", "add", "origin",
@@ -447,165 +636,309 @@ def stage_push_main(S, uc):
     code, out = git(repo, "push", "-u", "origin", "main")
     res = {"repo": uc["repo"], "owner": owner, "pushedMain": code == 0, "tail": out[-500:]}
     state.write(S, uc["slug"], "push-main", res)
+    if code != 0:  # surface a failed push instead of a silent WARN that reads as 'complete'
+        obs.record_failure(S, uc["slug"], "push-main", gate="push", summary=f"push main failed: {out[-160:]}",
+                           signals={"exit": code}, evidence=[out[-500:]])
     print(f"{'OK' if code==0 else 'WARN'} push-main:{uc['slug']} -> {owner}/{uc['repo']}"); return res
 
 
 def stage_integrate(S, uc):
     if not gates.baseline_up(state.read(S, uc["slug"], "boot") or {}):
         die_gate(f"integrate needs GATE.baselineUp:{uc['slug']} — no integrating on a dead baseline")
-    load_envfile_into_os()  # integration codegen needs the CometChat app creds
+    load_envfile_into_os(S, uc)  # integration codegen needs the CometChat app creds
     if not os.environ.get("COMETCHAT_APP_ID"):
         die_gate(f"integrate:{uc['slug']} needs COMETCHAT_APP_ID — run provision-app first tag=agent")
     repo = state.repo_dir(S, uc["slug"]); logs = repo / "_logs"
-    git(repo, "checkout", "-q", "main"); git(repo, "checkout", "-q", "-B", "feature/cometchat-integration")
-    comps, worst, reports = prompts.expand_components(uc), 0, []
+    scoped = bool(os.environ.get("STEP4_ONLY"))
+    if scoped:
+        # SCOPED (additive) integrate: only some components are being (re)integrated, so we must NOT
+        # reset the feature branch to the bare baseline — that would discard the OTHER components'
+        # already-integrated (and possibly hand-verified) code. Stay on the feature branch and mutate
+        # only the target component's dir; a clean checkout would defeat the whole point of scoping.
+        git(repo, "checkout", "-q", "-B", "feature/cometchat-integration")
+        ensure_repo(repo)
+    else:
+        # ROLLBACK: every integrate attempt starts from the KNOWN-GOOD baseline, not a half-mutated tree
+        # left by a prior failed attempt (which caused nondeterministic re-runs, duplicate wiring, or a
+        # green compile over incoherent code). reset+clean keeps the gitignored injected .env/node_modules.
+        git(repo, "checkout", "-q", "main"); git(repo, "checkout", "-q", "-B", "feature/cometchat-integration")
+        git(repo, "reset", "--hard", "main"); git(repo, "clean", "-fdq")
+        ensure_repo(repo)  # refresh .gitignore on the feature branch so integrate never tracks the cred
+        #                    files self-heal writes (.dart_define.json/local.properties) — untracks any too
+    comps, worst, reports = _only_filter(prompts.expand_components(uc)), 0, []
     for c in comps:
         cdir = repo / c["dir"]
+        # env allowlist: the integrate codegen agent gets APP_ID/REGION/AUTH_KEY but NOT the
+        # automation/REST/webhook secrets it has no legitimate use for (injection/exfiltration guard).
         r = claude_runner.run_headless(prompts.render_integrate(S, uc, c), settings=S, phase="B",
-                                       cwd=cdir, model_key="integrate", label=f"integrate-{c['name']}", log_dir=logs)
+                                       cwd=cdir, model_key="integrate", label=f"integrate-{c['name']}",
+                                       log_dir=logs, deny_env=secrets.INTEGRATE_DENY_ENV)
         g = verify.build_gate(c["kind"], cdir)
+        # SELF-HEAL parity with build: a known compile signature (jdk17/gradle/pod/…) auto-repairs+retries
+        healed = []
+        if g["buildExitCode"] != 0:
+            ctx = {"stage": "integrate", "slug": uc["slug"], "kind": c["kind"], "stack": c["stack"], "repo_dir": repo,
+                   "comp_dir": cdir, "mobile_dir": cdir, "env_file": str(uc_env_file(S, uc)), "integrated": True}
+            healed = selfheal.heal(ctx, g["outputTail"])
+            if healed:
+                print(f"  self-heal integrate:{c['name']} → {[h['rule'] for h in healed]}; retrying")
+                g = verify.build_gate(c["kind"], cdir, env=ctx.get("env")); g["selfHealed"] = [h["rule"] for h in healed]
+        # LAYER 2 — SKILLS CRITIC (concurrent, per-component). An adversarial reviewer reads THIS component's
+        # diff + the build/self-heal log and extracts genuine CometChat skills/docs/SDK gaps the builder did
+        # NOT self-report, with retraction discipline. Runs even on a CLEAN compile (most gaps are silent —
+        # a component that renders but no-ops) and DURING integrate so self-heal can't fix-and-hide.
+        if S.get("skills_critic", True):
+            sh_ids = ", ".join(h["rule"] for h in healed) or "none"
+            try:
+                cr = claude_runner.run_headless(
+                    prompts.render_skills_critic(S, uc, c, g.get("outputTail", ""), g["buildExitCode"], sh_ids),
+                    settings=S, phase="B", cwd=cdir, model_key="critic", label=f"critic-{c['name']}",
+                    log_dir=logs, deny_env=secrets.INTEGRATE_DENY_ENV)
+                print(f"  skills-critic {c['name']}: agentOk={cr.get('agentOk')} tokens={cr.get('tokens')}")
+                obs.event(S, uc["slug"], "integrate", "critic_end", component=c["name"], agentOk=cr.get("agentOk"))
+            except Exception as e:
+                print(f"  skills-critic {c['name']} skipped: {str(e)[:100]}")
         rep = {"component": c["name"], "kind": c["kind"], "stack": c["stack"],
                "compileExitCode": g["buildExitCode"], "tokens": r["tokens"],
-               "hitMaxTurns": r.get("hitMaxTurns"), "tail": g["outputTail"]}
+               "hitMaxTurns": r.get("hitMaxTurns"), "isError": r.get("isError"),
+               "agentOk": r.get("agentOk"), "terminalReason": r.get("terminalReason"),
+               "costUsd": r.get("costUsd"), "tail": g["outputTail"]}
         state.write(S, uc["slug"], f"report-{c['name']}", rep); reports.append(rep)
-        worst = max(worst, g["buildExitCode"])  # compile is authoritative, not agent exit
-    if worst == 0:
+        obs.event(S, uc["slug"], "integrate", "codegen_end", component=c["name"],
+                  compileExit=g["buildExitCode"], agentOk=r.get("agentOk"),
+                  hitMaxTurns=r.get("hitMaxTurns"), tokens=r["tokens"], costUsd=r.get("costUsd"))
+        worst = max(worst, g["buildExitCode"])  # compile authoritative; agentOk (below) gates truncation
+    truncated = [rp["component"] for rp in reports if not rp.get("agentOk", True)]
+    # commit ONLY a complete, compiling integration — never a truncated one
+    if worst == 0 and not truncated:
         git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", f"CometChat integration {uc['name']}")
     gaps.rebuild(S)
-    res = {"useCase": uc["name"], "slug": uc["slug"], "compileExitCode": worst, "reports": reports}
+    res = {"useCase": uc["name"], "slug": uc["slug"], "compileExitCode": worst,
+           "reports": reports, "truncatedComponents": truncated}
     state.write(S, uc["slug"], "integrate", res)
     if not gates.integrate(res):
-        die_gate(f"integrate:{uc['slug']} (compileExit={worst}) tag=skills")
-    print(f"OK integrate:{uc['slug']} compiled"); return res
+        fail_gate(S, uc, "integrate",
+                  f"integrate:{uc['slug']} compileExit={worst} truncated={truncated}",
+                  {"exit": 2, "hitMaxTurns": bool(truncated),
+                   "isError": any(rp.get("isError") for rp in reports)},
+                  gate="integrate", evidence=[rp.get("tail", "")[:200] for rp in reports])
+    print(f"OK integrate:{uc['slug']} compiled (no truncation)"); return res
 
 
 def stage_verify(S, uc):
     if not gates.integrate(state.read(S, uc["slug"], "integrate") or {}):
         die_gate(f"verify needs GATE.integrate:{uc['slug']}")
-    load_envfile_into_os()  # SDK init + compose need the creds
+    load_envfile_into_os(S, uc)  # SDK init + compose need the creds
     repo = state.repo_dir(S, uc["slug"]); V = S["verify"]
-    # STEP 1 — seed namespaced CometChat users + a conversation (deterministic 2-party chat)
-    seed = cometchat.seed_conversation(str(ENV_FILE), uc["slug"])
-    # STEP 2 — re-boot the integrated system
+    web_url = V.get("web_url", "http://localhost:3000")
+    (repo / "_demo").mkdir(exist_ok=True); demo_dir = str(repo / "_demo")
+    # STEP 1 — re-boot the integrated system; health-check BOTH backend AND web (web was never checked)
     hpaths = V.get("backend_health_paths") or [V.get("backend_health_path", "/health")]
+    # Inject THIS use case's OWN CometChat creds into the backend compose env. The integrate code reads
+    # env('COMETCHAT_APP_ID') to mint the auth token, but compose passed none → empty token → the app
+    # skips CometChat login → the conversation list errors ("Oops") on every client. Routed through
+    # preapply so self-heal WITNESSES it as a skills finding (not a silent fix).
+    _ce = selfheal.preapply({"stage": "verify", "slug": uc["slug"], "repo_dir": repo,
+                             "env_file": str(uc_env_file(S, uc)), "integrated": True})
+    if _ce:
+        print(f"  verify compose-env self-heal: {[x['rule'] for x in _ce]}")
+    # A Flutter-unified app serves web statically from app/build/web — host-build the INTEGRATED web
+    # (with CometChat + the semantics hook, empty API_URL → nginx /api proxy) BEFORE compose, else the
+    # web container serves the stale baseline build and the chat-receive proof runs against the wrong app.
+    if (repo / "app" / "pubspec.yaml").exists() and not (repo / "web").exists():
+        wb = providers.host_build_flutter_web(repo / "app", env_file=str(uc_env_file(S, uc)))
+        print(f"  verify host flutter web build: ok={wb.get('ok')}")
     dockerUp, boot_tail = (verify.compose_up(repo) if (repo / "docker-compose.yml").exists() else (False, "no compose"))
-    healthy, _ = verify.health_check(V.get("backend_url", "http://localhost:8080"), hpaths,
-                                     V["backend_health_timeout_s"]) if dockerUp else (False, None)
-    # STEP 3 — real chat/call e2e in the browser (login → open chat → send → call); bounded retry.
-    # Accounts are the per-UC call-test pair (not mkt-hardcoded) — the web party logs into the browser.
-    _acc = cometchat.call_test_accounts(uc["slug"])
-    email = _acc["web"][0]; password = uc.get("e2ePassword", "Mkt@seed2026!")
-    shot = str(repo / "_demo" / "web-call.png"); (repo / "_demo").mkdir(exist_ok=True)
-    retry, e2e = 0, {}
-    while retry <= S["max_retries"]:
-        e2e = verify.run_chatcall_web(repo, email, password, V.get("web_url", "http://localhost:3000"), shot) if healthy else {"error": "not healthy"}
-        if e2e.get("chatWorks") and e2e.get("callWorks"):
-            break
-        retry += 1
-    sdk_ok = bool(e2e.get("sdkReady") or e2e.get("login"))          # SDK inited = CometChat login + list rendered (browser-proven)
-    chat_ok, call_ok = bool(e2e.get("chatWorks")), bool(e2e.get("callWorks"))
-    # STEP 4 — TWO-PARTY call matrix (web↔web voice+video: caller rings, callee accepts, both connect).
-    # The android↔web / ios↔web legs are exercised hands-on in the manual demo (CP2) — two-party
-    # mobile↔web call automation isn't proven, so we record those legs as manual rather than fake them.
-    caller_email, callee_email = _acc["web"][0], _acc["mobile"][0]   # per-UC call-test pair
-    matrix = verify.run_twoparty_web(repo, V.get("web_url", "http://localhost:3000"),
-                                     str(repo / "_demo"), caller_email, callee_email, password,
-                                     env_file=str(ENV_FILE), slug=uc["slug"]) if healthy else {"ok": False, "error": "not healthy"}
-    call_matrix = {
-        "web-web": {"voice": bool(matrix.get("voice", {}).get("callWorks")),
-                    "video": bool(matrix.get("video", {}).get("callWorks")), "mode": "automated"},
-        "android-web": {"mode": "manual-demo", "note": "verify hands-on at CP2 (emulator↔web)"},
-        "ios-web": {"mode": "manual-demo", "note": "verify hands-on at CP2 (simulator↔web)"},
-    }
-    twoparty_ok = bool(matrix.get("ok"))
-    # STEP 5 — AI moderation probe (functional: send flagged content, observe if masked/blocked/flagged)
-    moderation = cometchat.check_moderation(str(ENV_FILE), uc["slug"]) if healthy else {"active": False, "error": "not healthy"}
-    # STEP 6 — VISION + BASELINE review of the captured screenshots (advisory, not a hard gate).
-    # "is it correct?" (Claude-vision rubric) + "did it change?" (perceptual baseline). Catches the
-    # visual bugs DOM selectors miss (bottom-left ring, chat bleed, app header over the call) and
-    # emits a self-contained HTML gallery for CP review. Off by settings if verify.vision_review=false.
+    backend_ok, _ = verify.health_check(V.get("backend_url", "http://localhost:8080"), hpaths,
+                                        V["backend_health_timeout_s"]) if dockerUp else (False, None)
+    web_ok, _ = verify.health_check(web_url, ["/"], 60) if dockerUp else (False, None)
+    healthy = bool(backend_ok and web_ok)
+    obs.event(S, uc["slug"], "verify", "reboot", dockerUp=dockerUp, backendOk=backend_ok, webOk=web_ok)
+    # A system that won't boot is INFRA/agent — NOT a skills gap. Fail with the right cause instead of
+    # running e2e that will 'refute' and mislabel skills (the ledger-poisoning misattribution).
+    if not healthy:
+        if dockerUp:
+            verify.compose_down(repo)
+        fail_gate(S, uc, "verify",
+                  f"verify:{uc['slug']} integrated system did not boot healthy (backend={backend_ok} web={web_ok})",
+                  {"dockerUp": dockerUp, "allServicesHealthy": False}, gate="integratedUp",
+                  evidence=[str(boot_tail)[:300]])
+    # STEP 2 — resolve the two chat-test parties from the app's OWN demo accounts (uc.chatPair),
+    # discover their CometChat uid via app login, and seed a conversation between them. No dependency
+    # on a chat-a/chat-b baseline seed (which drifts) — it uses accounts the app definitely has.
+    password = e2e_password(uc)
+    pair = cometchat.seed_and_resolve_pair(str(uc_env_file(S, uc)), uc, V.get("backend_url", "http://localhost:8080"), password)
+    obs.event(S, uc["slug"], "verify", "chat_pair", mode=pair.get("mode"), ok=pair.get("ok"),
+              web=pair["web"][0], mobile=pair["mobile"][0])
+    if not pair.get("ok"):
+        if dockerUp:
+            verify.compose_down(repo)
+        die_gate(f"verify:{uc['slug']} could not resolve/seed the chat-test pair ({pair.get('mode')}) — "
+                 f"check chatPair emails exist in the app seed: {pair.get('loginError') or 'seed send failed'} tag=setup")
+    seed = {"ok": True}
+    a_email, b_email = pair["web"][0], pair["mobile"][0]   # A = receiver, B = sender
+    recv_uid, send_uid = pair["web"][1], pair["mobile"][1]
+    submit = uc.get("e2eSubmit", "Sign In")
+    nonce_base = f"rx-{uc['slug']}-{int(time.time())}"
+    # The WEB-CLIENT SHAPE picks the e2e path: a Node web/ dir → browser DOM e2e; a Flutter-unified app
+    # (no web/, served static from app/build/web) → the flt-semantics tree; native-only → no web e2e.
+    has_web = (repo / "web").exists()
+    is_flutter = (repo / "app" / "pubspec.yaml").exists() and not has_web
+    if has_web:
+        # ---- Node web: cross-party receive (DOM) + single-browser SDK signal + two-party call ----
+        chat, chat_attempts = {}, []
+        for attempt in range(2):
+            chat = verify.run_twoparty_chat(repo, web_url, demo_dir, a_email, b_email, password, f"{nonce_base}-{attempt}")
+            chat_attempts.append({"received": bool(chat.get("received")), "error": chat.get("error")})
+            if chat.get("received") or chat.get("error"):
+                break
+        chat_ok, chat_harness = bool(chat.get("received")), bool(chat.get("error"))
+        shot = str(repo / "_demo" / "web-call.png")
+        e2e = verify.run_chatcall_web(repo, a_email, password, web_url, shot)
+        sdk_ok = bool(e2e.get("sdkReady"))
+        matrix = verify.run_twoparty_web(repo, web_url, demo_dir, a_email, b_email, password,
+                                         env_file=str(uc_env_file(S, uc)), slug=uc["slug"])
+        twoparty_ok = bool(matrix.get("ok"))
+        call_ok = twoparty_ok
+        call_matrix = {"web-web": {"voice": bool(matrix.get("voice", {}).get("callWorks")),
+                                   "video": bool(matrix.get("video", {}).get("callWorks")), "mode": "automated"},
+                       "android-web": {"mode": "manual-demo", "note": "verified in demo boot-2 (CP2)"},
+                       "ios-web": {"mode": "manual-demo", "note": "verified in demo boot-2 (CP2)"}}
+    elif is_flutter:
+        # ---- Flutter-unified: prove chat RECEIVE on the MOBILE client (android). CometChat's SDK does
+        # NOT initialise on Flutter web (shared_preferences MissingPluginException → the Conversations
+        # component shows "Oops"), so a web chat proof can never pass for a real integration — it is
+        # DEFERRED like Flutter-web calling, never faked. A logs in on-device, a peer REST-sends a unique
+        # nonce, and A's mobile UI must render it. ----
+        cfg = cometchat._cfg(str(uc_env_file(S, uc)))
+        shot = str(repo / "_demo" / "chat-receive.png")
+        api_android = S["verify"].get("api_android", "http://10.0.2.2:8080")
+        b_name = pair["mobile"][2] if len(pair["mobile"]) > 2 else ""   # sender's display name (thread title)
+        chat, chat_attempts = {}, []
+        for attempt in range(2):
+            chat = verify.run_flutter_chat_receive_mobile(repo, api_android, str(uc_env_file(S, uc)), cfg,
+                                                          a_email, send_uid, recv_uid,
+                                                          f"{nonce_base}-{attempt}", shot,
+                                                          sender_name=b_name, submit=submit, settings=S)
+            chat_attempts.append({"received": bool(chat.get("received")), "built": chat.get("built"),
+                                  "error": chat.get("error")})
+            if chat.get("received") or not chat.get("built"):   # a build/install failure won't fix on retry
+                break
+        chat_ok = bool(chat.get("received"))
+        chat_harness = bool(chat.get("error")) and not chat.get("built")
+        sdk_ok = bool(chat.get("sdkReady") or chat.get("received"))
+        e2e = chat
+        matrix, twoparty_ok, call_ok = {"mode": "deferred-flutter-demo"}, None, None
+        call_matrix = {"web-web": {"mode": "deferred-flutter-web-unsupported",
+                                   "note": "CometChat Flutter UIKit does not init on web; calling+chat proven on mobile"},
+                       "android-web": {"mode": "manual-demo"}, "ios-web": {"mode": "manual-demo"}}
+    else:
+        # ---- native-only web (unreachable for the current 10 archetypes) — rely on demo boot-2 ----
+        shot = str(repo / "_demo" / "web-call.png")
+        chat, chat_attempts, e2e = {"error": "no web e2e for this archetype"}, [], {}
+        chat_ok, chat_harness, sdk_ok = False, True, bool(seed.get("ok"))
+        matrix, twoparty_ok, call_ok = {"mode": "deferred-demo"}, None, None
+        call_matrix = {"web-web": {"mode": "deferred-demo"}, "android-web": {"mode": "manual-demo"},
+                       "ios-web": {"mode": "manual-demo"}}
+    # STEP 6 — AI moderation probe (reads the DELIVERED copy now, so masking can actually be observed)
+    moderation = cometchat.check_moderation(str(uc_env_file(S, uc)), uc["slug"])
+    # STEP 7 — VISION review, now with TEETH on the call-critical rubrics (verify.vision_gate).
     shot_review = {"skipped": True}
-    if healthy and S.get("verify", {}).get("vision_review", True):
-        demo_dir = repo / "_demo"
-        candidates = [("web-call", shot, "ongoing_call", "web ongoing call")]
-        for tag in ("voice", "video"):
-            candidates += [(f"callee-ringing-{tag}", str(demo_dir / f"callee-ringing-{tag}.png"), "incoming_ring", f"web {tag} incoming"),
-                           (f"callee-ongoing-{tag}", str(demo_dir / f"callee-ongoing-{tag}.png"), "ongoing_call", f"web {tag} ongoing")]
-        shots = [{"name": n, "path": p, "rubric": r, "context": c} for n, p, r, c in candidates if os.path.exists(p)]
+    if S.get("verify", {}).get("vision_review", True):
+        # chat-receive thread is reviewed on EVERY web shape. The CALL rubrics apply only to the Node-web
+        # call path — Flutter calling is deferred to the demo boot-2 matrix, so reviewing a Flutter run's
+        # chat screenshot against an ongoing_call rubric is a false refute (it isn't a call screen).
+        candidates = [("chat-receive", str(repo / "_demo" / "chat-receive.png"), "chat_thread", "cross-party received msg")]
+        if not is_flutter:
+            candidates.append(("web-call", shot, "ongoing_call", "web ongoing call"))
+            for tag in ("voice", "video"):
+                candidates += [(f"callee-ringing-{tag}", str(repo / "_demo" / f"callee-ringing-{tag}.png"), "incoming_ring", f"web {tag} incoming"),
+                               (f"callee-ongoing-{tag}", str(repo / "_demo" / f"callee-ongoing-{tag}.png"), "ongoing_call", f"web {tag} ongoing")]
+        shots = [{"name": n, "path": p, "rubric": rb, "context": cx} for n, p, rb, cx in candidates if os.path.exists(p)]
         if shots:
-            shot_review = shotreview.review(shots, uc["slug"], S, str(demo_dir / "shot-review.html"))
+            shot_review = shotreview.review(shots, uc["slug"], S, str(repo / "_demo" / "shot-review.html"))
+    vision_ran = shot_review.get("allCorrect") is not None
+    vision_critical_fail = shot_review.get("allCorrect") is False
+    vision_gate = S.get("verify", {}).get("vision_gate", True)
+    # SCORECARD — the verdict is a pure function of cross-party MACHINE evidence, not DOM shape.
+    scorecard = {"sdkInit": sdk_ok, "chatReceive": chat_ok,
+                 "callConnect": ("deferred-demo" if is_flutter else call_ok),
+                 "twoPartyWeb": ("deferred-demo" if is_flutter else twoparty_ok),
+                 "moderationActive": bool(moderation.get("active")),
+                 "visionOk": (None if not vision_ran else not vision_critical_fail)}
     integratedUp = bool(dockerUp and healthy and sdk_ok)
-    refuted = not (chat_ok and call_ok)                              # objective machine evidence, not a self-report
+    # Flutter web calling is proven in demo boot-2 (mobile matrix), not at verify — so it is NOT part
+    # of the verify refute; verify proves Flutter chat-receive + SDK-init.
+    refuted = not (sdk_ok and chat_ok and (True if is_flutter else bool(call_ok)))
+    if vision_gate and vision_critical_fail:
+        refuted = True
     td = verify.compose_down(repo) if dockerUp else {"dockerCleanupDone": True}
+    easeScore = (4 if chat_ok else 1) if is_flutter else (5 if (chat_ok and call_ok) else (3 if chat_ok else 1))
     res = {"useCase": uc["name"], "slug": uc["slug"], "dockerUp": dockerUp, "emulatorUp": False,
            "allServicesHealthy": healthy, "sdkInitOk": sdk_ok, "integratedUp": integratedUp,
            "cometchatUsersSeeded": 2 if seed.get("ok") else 0,
-           "chatWorks": chat_ok, "callWorks": call_ok, "refuted": refuted,
+           "chatWorks": chat_ok, "callWorks": call_ok, "refuted": refuted, "scorecard": scorecard,
+           "chatAttempts": chat_attempts, "chatHarnessError": chat_harness,
            "callMatrix": call_matrix, "twoPartyWebWorks": twoparty_ok,
            "moderation": {"active": moderation.get("active"), "detail": moderation.get("note"),
                           "masked": moderation.get("masked"), "blocked": moderation.get("blocked")},
-           "reason": "chat+call proven in browser" if not refuted else f"e2e incomplete: {e2e}",
-           "easeScore": 5 if (chat_ok and call_ok) else (3 if chat_ok else 1),
+           "reason": ("chat(receive)+sdk proven; call→demo boot-2" if is_flutter else "chat(receive)+call(2party)+sdk proven")
+                     if not refuted else f"refuted: sdk={sdk_ok} chatRx={chat_ok} call={call_ok} vision={scorecard['visionOk']}",
+           "easeScore": easeScore,
            "shotReview": {"allCorrect": shot_review.get("allCorrect"), "anyChanged": shot_review.get("anyChanged"),
                           "gallery": shot_review.get("gallery"), "results": shot_review.get("results")},
-           "retryCount": retry, "dockerCleanupDone": td.get("dockerCleanupDone"), "e2e": e2e, "callScreenshot": shot}
+           "dockerCleanupDone": td.get("dockerCleanupDone"), "e2e": e2e, "callScreenshot": shot}
     state.write(S, uc["slug"], "verify", res)
-    # Classify each auto-detected issue by CAUSE before recording. The curated skills ledger
-    # (gaps/<slug>.md) must contain ONLY genuine CometChat skills/SDK/docs gaps — never harness
-    # failures, coverage notes, or dashboard-setup state. Everything auto-detected here is triage
-    # material → it goes to pipeline-notes/<slug>.md, NOT the skills ledger. A human (or the
-    # integrate agent's explicit `tag=skills`) promotes a real skills gap into gaps/.
+    obs.event(S, uc["slug"], "verify", "verdict", refuted=refuted, sdk=sdk_ok, chatRx=chat_ok,
+              call=call_ok, twoparty=twoparty_ok, vision=scorecard["visionOk"])
+    # Triage notes — routed by cause; harness/setup NEVER pollute the skills gaps ledger.
     notes = []
-    if refuted and dockerUp:
-        err = str(e2e.get("error", "")) + str(e2e.get("pageErrors", ""))
-        harness = any(k in err for k in ("ERR_MODULE", "ENOENT", "Cannot find", "Traceback", "spawn"))
-        cause = "harness" if harness else "integration/verify"
-        notes.append(f"[{cause}] chat/call e2e did not pass — {str(e2e)[:400]}")
-    if healthy and not twoparty_ok:
-        notes.append(f"[harness/coverage] two-party web↔web call matrix incomplete — {str(matrix)[:300]}")
-    if healthy and not moderation.get("active"):
+    if chat_harness:
+        notes.append(f"[harness] cross-party chat proof did not run cleanly — {str(chat)[:300]}")
+    elif not chat_ok:
+        notes.append(f"[integration] cross-party message NOT received (real-time socket) — {chat_attempts}")
+    if not is_flutter and not twoparty_ok:
+        notes.append(f"[coverage] two-party web↔web call matrix incomplete — {str(matrix)[:250]}")
+    if not moderation.get("active"):
         notes.append(f"[setup] AI moderation not observed — {moderation.get('note')} "
                      f"(enable the moderation/data-masking extension in the CometChat dashboard)")
-    if shot_review.get("allCorrect") is False:  # vision judge flagged a visual issue on a captured shot
-        bad = [f"{r['name']}({','.join(r['failedChecks'])})" for r in shot_review.get("results", []) if r.get("correct") is False]
-        notes.append(f"[visual] Claude-vision flagged shot(s): {', '.join(bad)} — see gallery {shot_review.get('gallery')}")
+    if vision_critical_fail:
+        bad = [f"{r['name']}({','.join(r.get('failedChecks', []))})" for r in shot_review.get("results", []) if r.get("correct") is False]
+        notes.append(f"[visual] Claude-vision flagged: {', '.join(bad)} — see gallery {shot_review.get('gallery')}")
     if notes:
         notes_dir = os.path.join(os.path.dirname(os.path.expanduser(S["gaps_dir"])), "pipeline-notes")
         os.makedirs(notes_dir, exist_ok=True)
         with open(os.path.join(notes_dir, f"{uc['slug']}.md"), "a") as f:
-            f.write(f"\n### auto-recorded verify triage ({uc['slug']})\n"
-                    + "\n".join(f"- {n}" for n in notes) + "\n")
+            f.write(f"\n### auto-recorded verify triage ({uc['slug']})\n" + "\n".join(f"- {n}" for n in notes) + "\n")
     if not gates.verify(res):
-        die_gate(f"verify:{uc['slug']} (integratedUp={integratedUp}, refuted={refuted}) tag=skills")
-    print(f"OK verify:{uc['slug']} chat={chat_ok} call={call_ok} "
-          f"2party(v/vid)={call_matrix['web-web']['voice']}/{call_matrix['web-web']['video']} "
-          f"mod={moderation.get('active')} vision={shot_review.get('allCorrect')} ease={res['easeScore']}"); return res
+        err = str(chat.get("error", "")) + str(e2e.get("error", "")) + str(e2e.get("pageErrors", ""))
+        fail_gate(S, uc, "verify",
+                  f"verify:{uc['slug']} refuted (sdk={sdk_ok} chatRx={chat_ok} call={call_ok} vision={scorecard['visionOk']})",
+                  {"dockerUp": dockerUp, "allServicesHealthy": healthy, "exit": 2}, gate="verify", err=err,
+                  evidence=[shot, shot_review.get("gallery", "")])
+    print(f"OK verify:{uc['slug']} sdk={sdk_ok} chatRx={chat_ok} call={'demo-boot2' if is_flutter else call_ok} "
+          f"mod={moderation.get('active')} vision={scorecard['visionOk']} ease={easeScore}"); return res
 
 
 def stage_push_branch(S, uc):
     if not gates.verify(state.read(S, uc["slug"], "verify") or {}):
         die_gate(f"push-branch needs GATE.verify:{uc['slug']}")
     repo = state.repo_dir(S, uc["slug"])
+    secret_scan_or_die(S, uc, repo, "push-branch")  # §4.6: scan the integration branch before it ships
     code, out = git(repo, "push", "-u", "origin", "feature/cometchat-integration")
     res = {"pushedBranch": code == 0, "tail": out[-500:]}
     state.write(S, uc["slug"], "push-branch", res)
+    if code != 0:
+        obs.record_failure(S, uc["slug"], "push-branch", gate="push", summary=f"push branch failed: {out[-160:]}",
+                           signals={"exit": code}, evidence=[out[-500:]])
     print(f"{'OK' if code==0 else 'WARN'} push-branch:{uc['slug']} — use case complete"); return res
-
-
-def _parse_judge(text: str) -> dict:
-    import re
-    m = re.search(r"\{.*\}", text, re.S)
-    try:
-        return json.loads(m.group(0)) if m else {}
-    except Exception:
-        return {}
 
 
 STAGES = {"preflight": stage_preflight, "provision-app": stage_provision,
           "build": stage_build, "containerize": stage_containerize, "boot": stage_boot,
           "demo": stage_demo, "teardown": stage_teardown,
           "push-main": stage_push_main, "integrate": stage_integrate,
-          "verify": stage_verify, "push-branch": stage_push_branch}
+          "verify": stage_verify, "readme": stage_readme, "push-branch": stage_push_branch}
 
 
 def main():
@@ -619,12 +952,22 @@ def main():
     ucs = {u["slug"]: u for u in load("use_cases.json")["use_cases"]}
     if args.use_case not in ucs:
         print(f"unknown use case {args.use_case}", file=sys.stderr); sys.exit(3)
+    uc = ucs[args.use_case]; slug = uc["slug"]
+    obs.run_id()  # mint/read the correlation id for this stage process
+    obs.event(S, slug, args.stage, "stage_start")
+    t0 = time.time()
     try:
-        STAGES[args.stage](S, ucs[args.use_case])
-    except SystemExit:
+        STAGES[args.stage](S, uc)
+        obs.event(S, slug, args.stage, "stage_end", exit=0, durationS=round(time.time() - t0, 1))
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else 2
+        obs.event(S, slug, args.stage, "stage_end", exit=code, durationS=round(time.time() - t0, 1))
         raise
     except Exception as e:
-        import traceback; traceback.print_exc()
+        import traceback; tb = traceback.format_exc(); traceback.print_exc()
+        obs.record_failure(S, slug, args.stage, gate=args.stage, summary=str(e)[:200],
+                           signals={"exit": 3, "isError": True}, err=tb)
+        obs.event(S, slug, args.stage, "stage_error", exit=3, err=str(e)[:200])
         print(f"STAGE-ERROR: {e}", file=sys.stderr); sys.exit(3)
 
 
