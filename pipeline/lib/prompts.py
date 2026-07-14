@@ -12,7 +12,7 @@ from pathlib import Path
 LAYOUT = {
     "N": [("backend", "backend"), ("web", "web"), ("android", "android"), ("ios", "ios")],
     "R": [("backend", "backend"), ("web", "web"), ("mobile", "mobile")],
-    "F": [("backend", "backend"), ("app", "app")],
+    "F": [("backend", "backend"), ("web", "web"), ("app", "app")],
 }
 STACK_KEY = {"backend": "backend", "web": "web", "android": "android",
              "ios": "ios", "mobile": "mobile", "app": "app"}
