@@ -20,3 +20,15 @@ workflow/node_modules/
 
 # Visual-baseline goldens (established per-machine on first run; not canonical test artifacts)
 pipeline-state/baselines/
+
+# resilience layer — per-run state is runtime, not source (keep only curated global policy)
+pipeline-state/*/journal.jsonl
+pipeline-state/*/heartbeat.json
+pipeline-state/*/HALT.json
+pipeline-state/*/PROGRESS.md
+pipeline-state/*/COMMANDS.jsonl
+pipeline-state/*/applied_commands.jsonl
+pipeline-state/*/DIRECTIVES.md
+pipeline-state/*/LEARNINGS.md
+!pipeline-state/global/POLICY.md
+!pipeline-state/global/LEARNINGS.md
