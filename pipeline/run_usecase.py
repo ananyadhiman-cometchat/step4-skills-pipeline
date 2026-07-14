@@ -213,6 +213,19 @@ def secret_scan_or_die(S, uc, repo, stage):
 
 
 # ===================== STAGES =====================
+def _only_filter(comps):
+    """Scope a stage's component list to STEP4_ONLY (comma-separated kinds or names),
+    e.g. STEP4_ONLY=web builds/integrates ONLY the web slice and leaves every other
+    component (and its committed integration) untouched. Empty env -> no filtering."""
+    only = {x.strip() for x in os.environ.get("STEP4_ONLY", "").split(",") if x.strip()}
+    if not only:
+        return comps
+    kept = [c for c in comps if c["kind"] in only or c["name"] in only]
+    if kept:
+        print(f"  [scoped] STEP4_ONLY={sorted(only)} -> {[c['name'] for c in kept]}")
+    return kept
+
+
 def stage_preflight(S, uc):
     """Phase 0 — initialise + stack-readiness gate + generate the spec-pin (req:baseline).
     No codegen tokens are spent past here unless this use case's stacks are actually buildable."""
@@ -274,7 +287,7 @@ def stage_build(S, uc):
     repo = state.repo_dir(S, uc["slug"]); repo.mkdir(parents=True, exist_ok=True)
     logs = repo / "_logs"
     ensure_repo(repo)  # init on main + write .gitignore BEFORE any codegen/add can track junk
-    comps, worst, runs = prompts.expand_components(uc), 0, []
+    comps, worst, runs = _only_filter(prompts.expand_components(uc)), 0, []
     for c in comps:
         cdir = repo / c["dir"]
         r = claude_runner.run_headless(prompts.render_build(S, uc, c), settings=S, phase="A",
@@ -613,14 +626,23 @@ def stage_integrate(S, uc):
     if not os.environ.get("COMETCHAT_APP_ID"):
         die_gate(f"integrate:{uc['slug']} needs COMETCHAT_APP_ID — run provision-app first tag=agent")
     repo = state.repo_dir(S, uc["slug"]); logs = repo / "_logs"
-    # ROLLBACK: every integrate attempt starts from the KNOWN-GOOD baseline, not a half-mutated tree
-    # left by a prior failed attempt (which caused nondeterministic re-runs, duplicate wiring, or a
-    # green compile over incoherent code). reset+clean keeps the gitignored injected .env/node_modules.
-    git(repo, "checkout", "-q", "main"); git(repo, "checkout", "-q", "-B", "feature/cometchat-integration")
-    git(repo, "reset", "--hard", "main"); git(repo, "clean", "-fdq")
-    ensure_repo(repo)  # refresh .gitignore on the feature branch so integrate never tracks the cred
-    #                    files self-heal writes (.dart_define.json/local.properties) — untracks any too
-    comps, worst, reports = prompts.expand_components(uc), 0, []
+    scoped = bool(os.environ.get("STEP4_ONLY"))
+    if scoped:
+        # SCOPED (additive) integrate: only some components are being (re)integrated, so we must NOT
+        # reset the feature branch to the bare baseline — that would discard the OTHER components'
+        # already-integrated (and possibly hand-verified) code. Stay on the feature branch and mutate
+        # only the target component's dir; a clean checkout would defeat the whole point of scoping.
+        git(repo, "checkout", "-q", "-B", "feature/cometchat-integration")
+        ensure_repo(repo)
+    else:
+        # ROLLBACK: every integrate attempt starts from the KNOWN-GOOD baseline, not a half-mutated tree
+        # left by a prior failed attempt (which caused nondeterministic re-runs, duplicate wiring, or a
+        # green compile over incoherent code). reset+clean keeps the gitignored injected .env/node_modules.
+        git(repo, "checkout", "-q", "main"); git(repo, "checkout", "-q", "-B", "feature/cometchat-integration")
+        git(repo, "reset", "--hard", "main"); git(repo, "clean", "-fdq")
+        ensure_repo(repo)  # refresh .gitignore on the feature branch so integrate never tracks the cred
+        #                    files self-heal writes (.dart_define.json/local.properties) — untracks any too
+    comps, worst, reports = _only_filter(prompts.expand_components(uc)), 0, []
     for c in comps:
         cdir = repo / c["dir"]
         # env allowlist: the integrate codegen agent gets APP_ID/REGION/AUTH_KEY but NOT the

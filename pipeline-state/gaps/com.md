@@ -99,3 +99,16 @@ init(appId, region)` in `onSuccess`, and set `CallNavigationContext.navigatorKey
 
 - docsEscape: incoming-call caller identity (display name) is not populated on the WebSocket incoming event, so a 1:1 call rings as "Unknown Caller"
     Confirmed live: `onIncomingCallReceived(Call)` fires with the caller present only as a uid — `call.sender?.name` / `call.callInitiator` name are empty on the socket event (the SDK's own Call model comments this: "WebSocket events where sender/receiver may be strings or in data.entities"). Using the SDK field directly shows "Unknown Caller" on the incoming toast. Fix: resolve the name with a separate `CometChat.getUser(uid)` lookup (falling back to callInitiator/sender name) and update the UI. Ask: cometchat-flutter-v6-calls should document that the incoming-call event carries only the caller uid and that the display name must be resolved via getUser (or ship a helper), so integrators don't render "Unknown Caller".
+
+## Skills-critic — web (web)
+
+- none (verified: `cometchat-react-patterns` §2 provider shape matches CometChatProvider.tsx exactly — module-level `initialized`/`loginInFlight` guards, `getLoggedinUser()` casing, `UIKitSettingsBuilder().setAppId().setRegion().setAuthKey().subscribePresenceForAllUsers().build()` → `CometChatUIKit.init(settings)`, `loginWithAuthToken(token)`, `logout()` all confirmed present in resolved `@cometchat/chat-uikit-react@6.5.3` types (dist/index.d.ts:2425/2470/2475/2492); `cometchat-react-calls` §1.4 explicitly sanctions the ZERO-`CometChatCalls.init`/`login` additive path and §1.7 the root-mounted `<CometChatIncomingCall />` — both matched by the diff (calls-sdk pinned `^5.0.1`); chat SDK `^4.1.12` matches patterns §8 `@cometchat/chat-sdk-javascript@^4`.)
+
+### agent (skill was correct; codegen missed it)
+- Build error TS2345 at CometChatProvider.tsx:66 — `doLogin(cometchatToken)` passes `string | null` to `(token: string)`.
+    The skill's provider (`cometchat-react-patterns` §2) logs in with a literal `ensureLoggedIn("cometchat-uid-1")`, so the skill never hits this. The agent adapted it to a nullable `cometchatToken` from `useAuth()` and relied on the `if (!cometchatToken) return` guard at line 41 — but TS does not narrow a captured variable inside the nested `async setup()` closure, so the type stays `string | null` at line 66. Pure TS-narrowing codegen defect (fix: hoist `const token = cometchatToken` after the guard, or param-type), not a CometChat skill/doc/SDK gap.
+
+### retracted (checked, not a real CometChat gap — why)
+- `<CometChatIncomingCall />` rendered without `CometChatCalls.init()`/`login()` — NOT a gap. `cometchat-react-calls` §1.4 states verbatim the common additive/default ringing path needs neither, and both canonical React v6 sample apps mount only `<CometChatIncomingCall />`. Code is correct per skill.
+- Chat SDK v4 (`^4.1.12`) paired with UI Kit v6 (`^6.5.3`) — NOT a mismatch. `cometchat-react-patterns` §8 install line prescribes `@cometchat/chat-uikit-react@^6 @cometchat/chat-sdk-javascript@^4`; the pairing is intended.
+- `getLoggedinUser` (lowercase 'in') possible typo — NOT a gap. Confirmed the static kit method is `getLoggedinUser()` (dist/index.d.ts:2475); the `getLoggedInUser()` variants at 1945/3328 are instance/SDK-User methods. Code matches skill and SDK.
