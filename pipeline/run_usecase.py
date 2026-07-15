@@ -453,15 +453,24 @@ def stage_demo(S, uc):
         acc_pair = cometchat.call_test_accounts(uc["slug"])
     li_acc = acc_pair; li_email = li_acc["mobile"][0]
     li_pw = e2e_password(uc)
+    login_failed = []
     for plat in ("android", "ios"):
         if shots.get(plat, {}).get("ok") and plat_app_id.get(plat):
             try:
                 li = providers.login_and_shot(plat, plat_app_id[plat], li_email, li_pw, str(demo / f"{plat}-loggedin.png"))
             except Exception as e:
                 li = {"ok": False, "shot": None, "err": str(e)[:120]}
-            if li.get("shot"):
-                shots[f"{plat}-loggedin"] = {"ok": li["ok"], "path": li["shot"]}
-            print(f"  {plat} login→home shot: ok={li.get('ok')}")             # per-UC package/bundle for the Maestro flows
+            shots[f"{plat}-loggedin"] = {"ok": bool(li.get("ok")), "path": li.get("shot")}
+            detail = str(li.get("err") or li.get("tail") or "login flow did not reach the logged-in home")[:90]
+            print(f"  {plat} login→home: {'✓ logged in' if li.get('ok') else '✗ LOGIN FAILED — ' + detail}")
+            if not li.get("ok"):
+                login_failed.append(plat)
+    # BEHAVIORAL GATE (not just a screenshot): a mobile client that LAUNCHES but can't sign in is broken —
+    # backend contract / decode / connectivity. This is the check that would have caught del's iOS Codable
+    # crash (login response omitted email) at baseline instead of a human finding it at CP1.
+    if login_failed:
+        die_gate(f"demo:{uc['slug']} mobile LOGIN failed on {login_failed} — the app launches but can't "
+                 f"sign in (backend contract / decode / connectivity). tag=agent")
     # AUTOMATED mobile↔web call matrix (boot-2) — android/ios clients that built OK ring the web peer.
     # Parameterized per use case: the app id + the two call-test accounts (not mkt-hardcoded).
     # A Flutter-unified app's WEB peer is Flutter-web, where CometChat's SDK can't init (shared_preferences

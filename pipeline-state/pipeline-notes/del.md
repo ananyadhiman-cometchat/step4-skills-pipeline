@@ -66,3 +66,14 @@ exercised the authenticated flow.
 
 Fix direction for the harness: install maestro (+ a readiness check for it), and have the behavioral-verify
 tier RUN the login flow per platform (record pass/fail), not just screenshot the login screen.
+
+## FIX wired: mobile login is now a gating behavioral check (Part-1 durable fix)
+Root causes the demo login check didn't run/gate: (1) it was gated behind the launch-check `ok`, which
+false-failed on the stale package (fixed by artifact-derived package/bundle); (2) maestro wasn't actually
+installed though bootstrap.maestro_install was configured; (3) the login result was recorded but NEVER
+gated. Fixes: readiness now REQUIRES `maestro` for android/ios/mobile/app (fails fast if absent); the demo
+now DIE-GATES when a launched mobile client can't sign in (login_and_shot via login_shot.flow.yaml —
+tap demo button → submit → wait for logged-in home). Verified live on del/iOS: the flow logged in and
+reached "Track My Delivery" (the same iOS decode crash would now HALT the demo at baseline, not reach a
+human at CP1). NOTE: maestro runs under Java 26 with reflective-access warnings (non-fatal); if a future
+JDK blocks it, point maestro at the pinned JDK 17.

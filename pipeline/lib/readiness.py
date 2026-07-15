@@ -18,12 +18,14 @@ STACK_TOOLS = {
     "python": ["python3"], "node": ["node"], "php": ["php"],
     "go": ["go"], "golang": ["go"], "java": ["java", "mvn"], "spring": ["java", "mvn"],
 }
-# a component kind implies extra platform tools regardless of stack wording
+# a component kind implies extra platform tools regardless of stack wording.
+# `maestro` drives the mobile LOGIN behavioral check (login_shot.flow.yaml) — without it the demo can
+# only screenshot the login screen, never verify login works (which hid del's iOS decode crash).
 KIND_EXTRA = {
-    "ios": ["xcodebuild", "xcrun"],
-    "android": ["adb"],
-    "mobile": ["node", "npm", "adb", "xcodebuild"],   # RN → both platforms
-    "app": ["flutter", "dart", "adb", "xcodebuild"],    # Flutter → both platforms
+    "ios": ["xcodebuild", "xcrun", "maestro"],
+    "android": ["adb", "maestro"],
+    "mobile": ["node", "npm", "adb", "xcodebuild", "maestro"],   # RN → both platforms
+    "app": ["flutter", "dart", "adb", "xcodebuild", "maestro"],    # Flutter → both platforms
 }
 
 
