@@ -139,6 +139,10 @@ def call_answered(env_file, slug, since_ts, poll_s: int = 12, uid: str | None = 
 CALL_TEST_OVERRIDE = {
     "mkt": {"mobile": ("sara.seller@mkt.io", "mkt-sel-001", "Sara Seller"),
             "web":    ("bob.buyer@mkt.io",   "mkt-buy-001", "Bob Buyer")},
+    # del maps chat/call to its OWN demo accounts (courier ↔ customer, who share a seeded conversation) —
+    # the chat-a/chat-b scaffold was removed so the live demo works with the demo accounts.
+    "del": {"web":    ("customer@del.io", "del-cus-001", "Sam Customer"),
+            "mobile": ("courier@del.io",  "del-cur-001", "Lena Courier")},
 }
 
 
