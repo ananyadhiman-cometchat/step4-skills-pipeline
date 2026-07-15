@@ -37,7 +37,7 @@ async function login(ctx, email) {
 }
 
 async function openFirstConversation(p) {
-  const item = p.locator('.cometchat-conversations__list-item, .cometchat-list-item, .cometchat-conversations .cometchat-list-item').first()
+  const item = p.locator('.cometchat-conversation-item, .cometchat-conversations__list-item-wrapper, .cometchat-conversations__list-item, .cometchat-list-item, .cometchat-conversations .cometchat-list-item').first()
   if (await item.count() === 0) return false
   await item.click()
   await p.waitForTimeout(2500)

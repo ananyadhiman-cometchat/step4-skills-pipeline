@@ -26,7 +26,7 @@ try {
   // didn't add the testid). App login alone is NOT proof the CometChat SDK initialised.
   R.sdkReady = (await p.getByTestId('cometchat-conversation-list').count()) > 0 ||
                (await p.locator('.cometchat-conversations, .cometchat-conversations__list').count()) > 0
-  await p.locator('.cometchat-conversations__list-item, .cometchat-list-item').first().click()
+  await p.locator('.cometchat-conversation-item, .cometchat-conversations__list-item-wrapper, .cometchat-conversations__list-item, .cometchat-list-item').first().click()
   await p.waitForTimeout(3500)
   // the ACTUAL seeded message text (cometchat.seed_conversation), not a coincidental /camera/ substring
   R.seedMsgVisible = (await p.getByText('automated call-test seed', { exact: false }).count()) > 0

@@ -24,7 +24,7 @@ try {
   await p.waitForFunction(() => !/\/login\/?$/.test(location.pathname), null, { timeout: 20000 }); R.login = true
   await p.goto(`${WEB}/conversations`, { waitUntil: 'networkidle' })
   await p.waitForTimeout(4000)
-  await p.locator('.cometchat-conversations__list-item, .cometchat-list-item').first().click()
+  await p.locator('.cometchat-conversation-item, .cometchat-conversations__list-item-wrapper, .cometchat-conversations__list-item, .cometchat-list-item').first().click()
   await p.waitForTimeout(3000)
   const sel = CALL_TYPE === 'video'
     ? '.cometchat-call-button__video button, .cometchat-call-button__video'

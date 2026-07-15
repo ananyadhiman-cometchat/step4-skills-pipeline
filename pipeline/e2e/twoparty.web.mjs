@@ -43,7 +43,7 @@ try {
   const caller = await login(callerCtx, CALLER.email); R.callerLogin = true
 
   // Caller opens the conversation with Sara and starts a voice/video call
-  await caller.locator('.cometchat-conversations__list-item, .cometchat-list-item').first().click()
+  await caller.locator('.cometchat-conversation-item, .cometchat-conversations__list-item-wrapper, .cometchat-conversations__list-item, .cometchat-list-item').first().click()
   await caller.waitForTimeout(3000)
   const btnSel = CALL_TYPE === 'video'
     ? '.cometchat-call-button__video button, .cometchat-call-button__video'
