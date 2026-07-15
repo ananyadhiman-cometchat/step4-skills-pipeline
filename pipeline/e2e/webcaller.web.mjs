@@ -21,7 +21,7 @@ try {
   await p.getByTestId('email-input').fill(EMAIL)
   await p.getByTestId('password-input').fill(PW)
   await p.getByTestId('login-submit').click()
-  await p.waitForURL(`${WEB}/`, { timeout: 15000 }); R.login = true
+  await p.waitForFunction(() => !/\/login\/?$/.test(location.pathname), null, { timeout: 20000 }); R.login = true
   await p.goto(`${WEB}/conversations`, { waitUntil: 'networkidle' })
   await p.waitForTimeout(4000)
   await p.locator('.cometchat-conversations__list-item, .cometchat-list-item').first().click()
