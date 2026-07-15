@@ -38,11 +38,12 @@ from lib import behavioral, diagnose, directives, journal, memory, prompts, stat
 
 # the linear stage plan (single occurrence each → clean journal keys). cp = human checkpoint after it.
 PLAN = [
-    {"stage": "preflight"}, {"stage": "build"}, {"stage": "containerize"}, {"stage": "boot"},
-    {"stage": "demo"}, {"stage": "push-main", "cp": "CP1"}, {"stage": "integrate"},
+    {"stage": "provision-app"}, {"stage": "preflight"}, {"stage": "build"}, {"stage": "containerize"},
+    {"stage": "boot"}, {"stage": "demo"}, {"stage": "push-main", "cp": "CP1"}, {"stage": "integrate"},
     {"stage": "verify"}, {"stage": "readme", "cp": "CP2"}, {"stage": "push-branch"}, {"stage": "teardown"},
-]  # a checkpoint fires BEFORE its stage — so CP1 gates the baseline push (after demo), CP2 gates the
-#   feature push (after verify). Human approval of a checkpoint = the "auto-push on approval" gate.
+]  # provision-app (create the per-UC CometChat app) is journaled so resume never re-creates it. A
+#   checkpoint fires BEFORE its stage — CP1 gates the baseline push (after demo), CP2 gates the feature
+#   push (after verify). Human approval of a checkpoint = the "auto-push on approval" gate.
 ORDER = [p["stage"] for p in PLAN]
 DIAGNOSABLE = {"build", "integrate", "demo"}          # stages a codegen fix can re-gate
 SIDE_EFFECTING = {"push-main", "push-branch", "provision-app"}  # never re-run if journaled ok
