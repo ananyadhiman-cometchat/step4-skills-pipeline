@@ -39,3 +39,13 @@ flagged. FIXED: derive the real package from the built artifact — `_apk_packag
 android, `_app_bundle_id` (Info.plist CFBundleIdentifier) for iOS; defaults are None. Re-verified: del's
 android app launches (foreground=com.del.delivery/.MainActivity) and renders the real Delivery login UI
 (truck branding + Email/Password + Sign In + Demo Accounts). The app was healthy all along.
+
+## codegen-quality: dispatch detail omitted the recipient (customer) + returned raw uids
+Product observation (caught by manual inspection at CP1): the parcel/dispatch detail view showed the
+courier but NOT the customer — the whole point of a dispatch screen is who it's going to. Root cause was
+codegen-quality, not schema: `parcels.customer_uid` is NOT NULL and populated, but (1) the parcels API
+did `SELECT *` with NO user joins, so it returned raw uids and no names, and (2) the detail UIs (web +
+android) rendered the courier uid but never rendered the customer at all. Fix: API LEFT JOINs users for
+customer_name/courier_name/dispatcher_name; web + android show a Customer row (resolved name). Pattern to
+watch for in generated apps: detail views that skip key relational fields, and list/detail queries that
+return foreign-key ids without resolving display names. Not a CometChat gap.
