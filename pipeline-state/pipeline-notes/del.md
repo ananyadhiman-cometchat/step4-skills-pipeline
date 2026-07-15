@@ -77,3 +77,51 @@ tap demo button → submit → wait for logged-in home). Verified live on del/iO
 reached "Track My Delivery" (the same iOS decode crash would now HALT the demo at baseline, not reach a
 human at CP1). NOTE: maestro runs under Java 26 with reflective-access warnings (non-fatal); if a future
 JDK blocks it, point maestro at the pinned JDK 17.
+
+## Disk filled to 100% mid-integrate → self-heal detected it but had no room to run diagnose (harness bug)
+On the push-main→integrate→verify resume, `integrate` halted on a genuine android compile error, but the
+diagnose loop then crashed with `OSError: [Errno 28] No space left on device` writing its OWN log
+(`runs/del/_logs/diagnose-integrate-3.log`). Root cause was environmental, three chained harness gaps:
+1. **Teardown never ran on finished use cases.** `runs/com` (8.1G) and `runs/mkt` (2.7G) — both long
+   completed — still held their full build caches (`app/build`, `.dart_tool`, `Pods`, `node_modules`,
+   `vendor`). The teardown stage that should GC a finished UC's working dir didn't fire last wave, so
+   ~11G of dead build cache accumulated and the volume hit 100% (164 MiB free of 228 GiB).
+2. **No disk preflight / no space guard.** Nothing checks free space before build/containerize/integrate,
+   so the pipeline walked straight into ENOSPC instead of failing fast with a clear "free N GB" message.
+3. **disk-full self-heal ran too late / diagnose logging is not ENOSPC-safe.** The `disk-full` rule fired
+   ("self-heal integrate:android → ['disk-full']; retrying") but couldn't reclaim enough, and the diagnose
+   worker's very first act — opening a log file for write — died on ENOSPC and took the whole supervisor
+   down (`SUPERVISOR_EXIT=1`).
+
+Manual recovery (2026-07-15): freed ~10.7G by deleting only the regenerable caches — com kept ALL source +
+`.env.cometchat` creds + `_demo/` proof + `_reports/` (8.1G→44M, re-demoable with pub get/pod install/npm
+install, NO re-provision); mkt kept `_demo/_reports` (2.7G→14M). Volume: 164 MiB → 11 GiB free.
+
+Fix direction for the harness: (a) teardown must run reliably on wave-complete AND be idempotently
+re-runnable as a GC pass (`supervisor.py gc` that strips regenerable dirs from finished UCs but keeps
+creds+proof); (b) a preflight disk-space gate (require e.g. ≥5 GB free before build/containerize/integrate,
+else GC-then-retry or halt with a human-readable message); (c) the disk-full self-heal should reclaim FIRST
+(prune the exact regenerable dirs above) before any retry, and diagnose logging must degrade gracefully
+(fall back to stderr/memory) instead of crashing the supervisor when it can't open a log. None is a
+CometChat gap.
+
+## iOS integrate/build gate never ran `pod install` or built the workspace (harness bug — FIXED)
+`verify.build_gate('ios', dir)` compiled with `xcodebuild -scheme ios build` on the bare `.xcodeproj`,
+never running `pod install` and never targeting the CocoaPods `.xcworkspace`. So the moment integrate adds
+a pod (`pod 'CometChatUIKitSwift'`), the gate fails with `no such module 'CometChatUIKitSwift'` — the code
+is fine, the module just isn't installed/linked. The demo & providers paths (`mobile.py`, `providers.py`)
+already did `pod install` + `-workspace`; the compile gate didn't. FIXED: added `_ios_gate` — when a Podfile
+exists it runs `pod install` (idempotent) then `xcodebuild -workspace <ws> -scheme <name>`; else the bare
+project. Protects every iOS use case (rea/evt/cre/fin). NOTE: this only gets iOS PAST the module-missing
+stage; del's iOS then hit a genuine CometChat SDK toolchain wall (see gaps/del.md — binaries built with
+Swift 6.2.3, un-compilable on Xcode 16.4/Swift 6.1.2). Harness follow-up worth considering: distinguish an
+**environment/toolchain-incompatible** component (blocked, needs infra/human — e.g. Xcode update) from a
+**codegen** failure (diagnosable), so a wave can reach CP2 on the other platforms with the block recorded
+instead of halting the whole use case.
+
+## Auto-repaired (self-heal witnessed — the fix's existence IS the finding)
+<!-- selfheal:disk-full -->
+- **`note:`** [self-heal:disk-full] UC1: builds filled the disk and crashed Docker
+  - _auto-repaired by the harness (fix's existence IS the finding)_: pruned transients; free=0GB
+  - _trigger evidence_: `No space left`
+

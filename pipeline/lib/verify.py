@@ -85,12 +85,30 @@ def build_gate(kind: str, comp_dir: Path, env: dict | None = None) -> dict:
         gw = comp_dir / "gradlew"
         code, out = _run(["./gradlew", "assembleDebug"], cwd=d, env=env) if gw.exists() else (127, "no gradlew")
     elif kind == "ios":
-        code, out = _run(["xcodebuild", "-scheme", comp_dir.name, "-sdk", "iphonesimulator", "build"], cwd=d, env=env)
+        code, out = _ios_gate(comp_dir, env=env)
     elif kind == "backend":
         code, out = _backend_build(comp_dir, env=env)
     else:
         code, out = 127, f"unknown kind {kind}"
     return {"kind": kind, "buildExitCode": code, "outputTail": _tail(out)}
+
+
+def _ios_gate(d: Path, env: dict | None = None) -> tuple[int, str]:
+    """iOS compile gate. When the app uses CocoaPods (a Podfile adding pods — e.g. CometChatUIKitSwift),
+    the integrated code `import`s a pod module that ONLY exists after `pod install`, and the build must
+    target the CocoaPods-generated `.xcworkspace`, not the bare `.xcodeproj`. The demo/providers paths
+    (mobile.py / providers.py) already do this; the integrate/build compile gate did not — so every
+    pod-based iOS integration failed here with "no such module 'CometChatUIKitSwift'". Mirror them."""
+    scheme = d.name
+    if (d / "Podfile").exists():
+        # pod install is idempotent; run it so the pod module is available to swiftc. Login shell → PATH/rbenv.
+        pc, po = _run(["bash", "-lc", "export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8; pod install"], cwd=str(d), env=env)
+        ws = next(iter(d.glob("*.xcworkspace")), None)
+        if ws is None:  # pod install did not produce a workspace → surface its output, don't build the bare project
+            return (pc or 1), "pod install did not produce an .xcworkspace:\n" + po
+        return _run(["xcodebuild", "-workspace", ws.name, "-scheme", scheme,
+                     "-sdk", "iphonesimulator", "build"], cwd=str(d), env=env)
+    return _run(["xcodebuild", "-scheme", scheme, "-sdk", "iphonesimulator", "build"], cwd=str(d), env=env)
 
 
 def _backend_build(d: Path, env: dict | None = None) -> tuple[int, str]:
