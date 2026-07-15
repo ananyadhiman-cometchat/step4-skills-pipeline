@@ -11,7 +11,7 @@ Hard-won recipe (UC1 mobile hardening — all generalized here):
 - Dismiss the Android 15 "16 KB compatibility" dialog before screenshotting.
 """
 from __future__ import annotations
-import os, subprocess, time
+import os, re, subprocess, time
 from pathlib import Path
 
 SDK = os.path.expanduser(os.environ.get("ANDROID_HOME") or "~/Library/Android/sdk")
@@ -198,7 +198,33 @@ def clean_stale_apps(keep_pkg: str | None = None) -> list[str]:
     return removed
 
 
-def install_launch_shot_android(apk: str, out_png: str, pkg="com.mkt.mobile") -> bool:
+def _apk_package(apk: str) -> str | None:
+    """Read the real applicationId straight from the built APK (aapt), so the launch check never uses a
+    stale hardcoded default (that installed com.del.delivery but tried to launch com.mkt.mobile)."""
+    try:
+        aapt = next(iter(Path(SDK).glob("build-tools/*/aapt")), None)
+        if not aapt:
+            return None
+        out = subprocess.run([str(aapt), "dump", "badging", apk], capture_output=True, text=True).stdout
+        m = re.search(r"package: name='([^']+)'", out)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def _app_bundle_id(app: str) -> str | None:
+    """Read CFBundleIdentifier from the built .app's Info.plist (the real bundle id to launch)."""
+    try:
+        r = subprocess.run(["/usr/libexec/PlistBuddy", "-c", "Print :CFBundleIdentifier",
+                            f"{app}/Info.plist"], capture_output=True, text=True)
+        b = r.stdout.strip()
+        return b or None
+    except Exception:
+        return None
+
+
+def install_launch_shot_android(apk: str, out_png: str, pkg=None) -> bool:
+    pkg = pkg or _apk_package(apk) or "com.mkt.mobile"   # derive the REAL package from the apk
     clean_stale_apps(keep_pkg=pkg)          # remove prior-UC apps so we can't screenshot the wrong one
     _adb("uninstall", pkg)                  # clean install of THIS app (no stale state)
     _adb("install", "-r", "-g", apk, timeout=180)   # -g pre-grants runtime perms (no dialog stealing foreground)
@@ -246,7 +272,8 @@ def build_ios(mobile_dir: Path, api_url: str) -> dict:
     return {"platform": "ios", "exitCode": code, "app": str(app) if app else None, "tail": _tail(out)}
 
 
-def install_launch_shot_ios(app: str, out_png: str, bundle="com.mkt.mobile", device="iPhone 16") -> bool:
+def install_launch_shot_ios(app: str, out_png: str, bundle=None, device="iPhone 16") -> bool:
+    bundle = bundle or _app_bundle_id(app) or "com.mkt.mobile"   # derive the REAL bundle from the .app
     subprocess.run(["xcrun", "simctl", "terminate", device, bundle], capture_output=True)
     subprocess.run(["xcrun", "simctl", "uninstall", device, bundle], capture_output=True)  # clean install
     subprocess.run(["xcrun", "simctl", "install", device, app], capture_output=True)

@@ -30,3 +30,12 @@ but `verify.run_e2e` never set `E2E_BASE_URL`, so the boot login-smoke navigated
 4200 (nothing there) instead of the composed web on 3000 → `loginSmokePassed=False`. FIXED: run_e2e now
 sets `E2E_BASE_URL`/`PLAYWRIGHT_BASE_URL`/`BASE_URL` to the deployed web url (default localhost:3000; boot
 passes `web_url`). (Separately: the Docker daemon crashed on a buildkit I/O error — infra, user restarted it.)
+
+## demo launch-check used a stale hardcoded package (com.mkt.mobile) — false "app not showing"
+The native android/iOS demo providers called install_launch_shot_{android,ios} without the app id, so it
+defaulted to mkt's `com.mkt.mobile`: it INSTALLED the real apk (com.del.delivery) but LAUNCHED com.mkt.mobile
+→ foreground was the launcher → false "app not showing (crash?)" + a splash-icon screenshot the vision judge
+flagged. FIXED: derive the real package from the built artifact — `_apk_package` (aapt dump badging) for
+android, `_app_bundle_id` (Info.plist CFBundleIdentifier) for iOS; defaults are None. Re-verified: del's
+android app launches (foreground=com.del.delivery/.MainActivity) and renders the real Delivery login UI
+(truck branding + Email/Password + Sign In + Demo Accounts). The app was healthy all along.
