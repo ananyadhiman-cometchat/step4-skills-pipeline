@@ -49,3 +49,20 @@ android) rendered the courier uid but never rendered the customer at all. Fix: A
 customer_name/courier_name/dispatcher_name; web + android show a Customer row (resolved name). Pattern to
 watch for in generated apps: detail views that skip key relational fields, and list/detail queries that
 return foreign-key ids without resolving display names. Not a CometChat gap.
+
+## demo never logs in on mobile — a real behavioral-verify gap (Issue A), + the iOS bug it hid
+User caught this at CP1. The demo's mobile check (install_launch_shot_{android,ios}) only does
+install → launch → screenshot, and the vision judge uses the `app_alive` rubric ("is it rendered").
+It NEVER types credentials or logs in. So it captured the login SCREEN and called it alive — and never
+exercised the authenticated flow.
+
+- A Maestro login flow EXISTS (e2e/mobile_flows/login_shot.flow.yaml: taps a demo button → submits →
+  waits for the logged-in home) but is UNUSED by the demo, AND `maestro` is not installed. readiness.py
+  checks toolchains but not `maestro`, so the login flow could never run anyway.
+- This is exactly review Issue A (gates verify render, not behavior) + Issue B (harness not provisioned).
+- The bug it hid (codegen): iOS login CRASHED — `safeUser` (login self projection) omitted `email`, so the
+  strict iOS Codable User decode failed ("the data couldn't be read because it is missing"); Android's
+  non-null email was silently null. Fixed backend to include email in the login user (self only).
+
+Fix direction for the harness: install maestro (+ a readiness check for it), and have the behavioral-verify
+tier RUN the login flow per platform (record pass/fail), not just screenshot the login screen.
