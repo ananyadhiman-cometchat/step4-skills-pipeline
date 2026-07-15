@@ -39,9 +39,10 @@ from lib import behavioral, diagnose, directives, journal, memory, prompts, stat
 # the linear stage plan (single occurrence each → clean journal keys). cp = human checkpoint after it.
 PLAN = [
     {"stage": "preflight"}, {"stage": "build"}, {"stage": "containerize"}, {"stage": "boot"},
-    {"stage": "demo", "cp": "CP1"}, {"stage": "push-main"}, {"stage": "integrate"},
-    {"stage": "verify", "cp": "CP2"}, {"stage": "readme"}, {"stage": "push-branch"}, {"stage": "teardown"},
-]
+    {"stage": "demo"}, {"stage": "push-main", "cp": "CP1"}, {"stage": "integrate"},
+    {"stage": "verify"}, {"stage": "readme", "cp": "CP2"}, {"stage": "push-branch"}, {"stage": "teardown"},
+]  # a checkpoint fires BEFORE its stage — so CP1 gates the baseline push (after demo), CP2 gates the
+#   feature push (after verify). Human approval of a checkpoint = the "auto-push on approval" gate.
 ORDER = [p["stage"] for p in PLAN]
 DIAGNOSABLE = {"build", "integrate", "demo"}          # stages a codegen fix can re-gate
 SIDE_EFFECTING = {"push-main", "push-branch", "provision-app"}  # never re-run if journaled ok
@@ -95,23 +96,26 @@ def _halt_packet(repo: Path, slug: str, stage: str, rc: int, gate_output: str) -
             "repo_diff": diff[:2000], "summary": f"stage {stage} failed (exit {rc})"}
 
 
-def _behavioral_pass(S: dict, uc: dict) -> tuple[bool, list]:
+def _behavioral_pass(S: dict, uc: dict, slug: str) -> tuple[bool, list]:
     """After verify, record the behavioral checklist (pass/fail/unverified) to the journal."""
     comps = prompts.expand_components(uc)
     v = state.read(S, uc["slug"], "verify") or {}
     results = v.get("behavioral") or {}     # verify stage may publish per-feature bools; else all unverified
     statuses = behavioral.run(comps, results)
     for s in statuses:
-        journal.append(S, uc["slug"], f"behavior:{s['key']}",
+        journal.append(S, slug, f"behavior:{s['key']}",
                        journal.OK if s["status"] == "pass" else
                        (journal.UNVERIFIED if s["status"] == "unverified" else journal.FAIL),
                        note=s["detail"])
     return behavioral.gate(statuses), statuses
 
 
-def run_usecase(S: dict, uc: dict, autonomy: str) -> str:
-    slug = uc["slug"]
-    repo = state.repo_dir(S, uc["slug"])
+def run_usecase(S: dict, uc: dict, autonomy: str, dry: bool = False) -> str:
+    # --dry-run walks the whole durable loop but stubs stage execution and writes to a SEPARATE
+    # '<slug>-dryrun' state namespace, so the real use case is never touched.
+    real_slug = uc["slug"]
+    slug = f"{real_slug}-dryrun" if dry else real_slug
+    repo = state.repo_dir(S, real_slug)
     journal.heartbeat(S, slug, "running")
     memory.update_progress(S, slug, ORDER)
 
@@ -156,15 +160,19 @@ def run_usecase(S: dict, uc: dict, autonomy: str) -> str:
         # --- run the stage ---
         journal.heartbeat(S, slug, "running", stage)
         print(f"▶ {slug} :: {stage}")
-        rc = _run_stage(slug, stage)
+        if dry:
+            print(f"  [dry] would run stage {stage} (no codegen/docker/git executed)")
+            rc = 0
+        else:
+            rc = _run_stage(real_slug, stage)
 
         if rc == 0:
-            _, sha = _git(repo, "rev-parse", "HEAD")
+            sha = "dry" if dry else _git(repo, "rev-parse", "HEAD")[1]
             journal.append(S, slug, stage, journal.OK, sha=sha, caused_by=cb)
             journal.clear_halt(S, slug)
             memory.update_progress(S, slug, ORDER)
             if stage == "verify":
-                ok, statuses = _behavioral_pass(S, uc)
+                ok, statuses = _behavioral_pass(S, uc, slug)
                 bad = [s for s in statuses if s["status"] != "pass"]
                 if bad:
                     print("  behavioral:", ", ".join(f"{s['key']}={s['status']}" for s in bad))
@@ -209,7 +217,7 @@ def cmd_run(S, args):
     for slug in slugs:
         if slug not in ucs:
             print(f"unknown use case {slug}", file=sys.stderr); sys.exit(3)
-        status = run_usecase(S, ucs[slug], args.autonomy)
+        status = run_usecase(S, ucs[slug], args.autonomy, dry=getattr(args, "dry_run", False))
         if status not in ("done",):
             break            # a pause/halt/checkpoint stops the wave until the human/communicator acts
 
@@ -246,6 +254,8 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run"); r.add_argument("--use-case"); r.add_argument("--wave", type=int)
     r.add_argument("--autonomy", default="checkpoint", choices=["auto", "gated", "checkpoint"])
+    r.add_argument("--dry-run", action="store_true",
+                   help="walk the durable loop without running stages; writes to <slug>-dryrun state")
     s = sub.add_parser("status"); s.add_argument("--use-case", required=True)
     c = sub.add_parser("command")
     c.add_argument("--scope", required=True); c.add_argument("--kind", required=True)
