@@ -106,12 +106,60 @@ def _fix_cleartext(ctx) -> tuple[bool, str]:
 
 
 def _fix_jdk17(ctx) -> tuple[bool, str]:
-    """UC1: gradle needs JDK 17 (JDK 26 → 'Unsupported class file major version 70'). Pin JAVA_HOME."""
+    """gradle/kotlin need JDK 17-21. A too-new JDK fails two ways: 'Unsupported class file major version'
+    (older-kotlin path) OR 'IllegalArgumentException: <ver>' from Kotlin's JavaVersion.parse when the
+    major is unknown (e.g. Java 26). Pin JAVA_HOME for the re-gate AND persist org.gradle.java.home in the
+    android project's gradle.properties, so later rebuilds (demo boot-2, post-integrate) heal too."""
     from lib import mobile
-    if os.path.isdir(mobile.JDK17):
-        ctx.setdefault("env", {})["JAVA_HOME"] = mobile.JDK17
-        return True, f"JAVA_HOME={mobile.JDK17}"
-    return False, "JDK17 not installed"
+    jdk = mobile.JDK17 if os.path.isdir(mobile.JDK17) else _discover_jdk()
+    if not jdk:
+        return False, "no compatible JDK (17-21) found — install one (brew install openjdk@17)"
+    ctx.setdefault("env", {})["JAVA_HOME"] = jdk
+    app = Path(ctx.get("comp_dir") or ctx.get("mobile_dir") or "")
+    if (app / "gradlew").exists() or (app / "settings.gradle").exists() or (app / "settings.gradle.kts").exists():
+        gp = app / "gradle.properties"
+        txt = gp.read_text() if gp.exists() else ""
+        if "org.gradle.java.home" not in txt:
+            with gp.open("a") as f:
+                f.write(f"\norg.gradle.java.home={jdk}\n")
+    return True, f"JDK={jdk} (JAVA_HOME + org.gradle.java.home)"
+
+
+def _discover_jdk() -> str | None:
+    """Find a JDK whose major version is 17-21 (android/kotlin-safe). java_home falls back to the newest
+    installed JDK, so we validate the actual version rather than trusting it."""
+    cands = [
+        "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home",
+        "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home",
+        "/Applications/Android Studio.app/Contents/jbr/Contents/Home",
+        os.path.expanduser("~/Applications/Android Studio.app/Contents/jbr/Contents/Home"),
+    ]
+    for home in cands:
+        rel = Path(home) / "release"
+        if rel.exists():
+            m = re.search(r'JAVA_VERSION="(\d+)', rel.read_text())
+            if m and 17 <= int(m.group(1)) <= 21:
+                return home
+    return None
+
+
+def _fix_android_sdk(ctx) -> tuple[bool, str]:
+    """android gradle build needs the SDK location (ANDROID_HOME / sdk.dir). Codegen scaffolds rarely
+    write local.properties (it's machine-specific + normally git-ignored), so a fresh checkout fails with
+    'SDK location not found'. Write sdk.dir from ANDROID_HOME / the default macOS SDK path."""
+    app = Path(ctx.get("comp_dir") or ctx.get("mobile_dir") or "")
+    if not ((app / "gradlew").exists() or (app / "settings.gradle").exists() or (app / "settings.gradle.kts").exists()):
+        return False, "not an android/gradle project"
+    sdk = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT") \
+        or os.path.expanduser("~/Library/Android/sdk")
+    if not os.path.isdir(sdk):
+        return False, "Android SDK not found (set ANDROID_HOME)"
+    lp = app / "local.properties"
+    txt = lp.read_text() if lp.exists() else ""
+    if "sdk.dir" not in txt:
+        with lp.open("a") as f:
+            f.write(f"\nsdk.dir={sdk}\n")
+    return True, f"sdk.dir={sdk}"
 
 
 def _fix_call_permissions(ctx) -> tuple[bool, str]:
@@ -308,7 +356,8 @@ RULES = [
             "needs android:usesCleartextTraffic + a network_security_config AND the INTERNET permission in the "
             "MAIN manifest (Flutter injects INTERNET only into the DEBUG manifest) + iOS ATS NSAllowsArbitraryLoads."},
     {"id": "jdk17", "phase": "on_fail", "families": {"rn", "flutter", "android-native"},
-     "sig": r"Unsupported class file major version|invalid source release|requires Java", "fix": _fix_jdk17,
+     "sig": r"Unsupported class file major version|invalid source release|requires Java"
+            r"|JavaVersion\.parse|IllegalArgumentException: \d+\.\d+\.\d+|isAtLeastJava", "fix": _fix_jdk17,
      "note": "UC1: gradle needs JDK 17", "owner": "skills",
      "gap": "The core/build skill should pin the JDK/Kotlin floor (JDK 17; Kotlin >=2.2.0 for 6.0.x GA) — a newer "
             "JDK or older Kotlin fails with 'Unsupported class file major version' / 'incompatible metadata version'."},
@@ -340,6 +389,10 @@ RULES = [
     {"id": "disk-full", "phase": "on_fail", "families": None,
      "sig": r"ENOSPC|No space left|disk full|write error", "fix": _fix_disk,
      "note": "UC1: builds filled the disk and crashed Docker", "owner": "harness"},
+    {"id": "android-sdk", "phase": "on_fail", "families": {"rn", "flutter", "android-native"},
+     "sig": r"SDK location not found|ANDROID_HOME|Define a valid SDK location|sdk\.dir", "fix": _fix_android_sdk,
+     "note": "android gradle build needs sdk.dir/ANDROID_HOME (codegen omits machine-specific local.properties)",
+     "owner": "harness"},
     {"id": "compose-env", "phase": "pre", "families": None, "when_integrated": True,
      "sig": None, "fix": _fix_compose_env,
      "note": "UC1: inject COMETCHAT_* into the deployment env, not just .env.example", "owner": "skills",

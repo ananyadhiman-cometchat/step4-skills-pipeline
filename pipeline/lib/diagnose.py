@@ -55,6 +55,11 @@ def diagnose_and_fix(settings: dict, slug: str, repo: Path, stage: str, comp: di
     logs = repo / "_logs"
     ctx = memory.session_context(settings, slug)
     gate_tail = str(halt_packet.get("gate_output", ""))
+    # A build that fails before the baseline commit leaves the repo with NO HEAD — git worktree can't
+    # branch off a non-existent HEAD. Make an initial commit so the diagnose worktree has a base.
+    if _git(repo, "rev-parse", "--verify", "-q", "HEAD")[0] != 0:
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", "wip: pre-diagnose snapshot (baseline did not yet compile)")
     _, base_sha = _git(repo, "rev-parse", "HEAD")
     attempts = 0
 
