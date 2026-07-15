@@ -50,7 +50,7 @@ Then, per component:
      on 3000. `web/Dockerfile`.
    - **Flutter web** (web client is Flutter, no `web/` dir) → per rule C: `{web_dir}/Dockerfile` is
      `FROM nginx:alpine` + `COPY build/web /usr/share/nginx/html` (pipeline host-builds `build/web`).
-     The nginx config MUST also **proxy `/api` → the backend** (`location /api/ { proxy_pass http://backend:8000; }`) so the web app's relative `/api` calls reach the backend — otherwise login 404s. Do NOT run `flutter build web` inside Docker.
+     The nginx config MUST also **proxy `/api` → the backend** (`location /api/ {{ proxy_pass http://backend:8000; }}`) so the web app's relative `/api` calls reach the backend — otherwise login 404s. Do NOT run `flutter build web` inside Docker.
    - Native mobile dirs (android/, ios/, mobile/, or the Flutter `app/` MOBILE targets) are NOT
      containerized — they build on a device/emulator separately.
 

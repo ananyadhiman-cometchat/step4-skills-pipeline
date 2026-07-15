@@ -17,3 +17,9 @@ both now self-healed; backend/web/iOS compiled first try.
 
 Net: all three are harness/environment robustness fixes; none is a CometChat gap. Protects the remaining
 android use cases (fin, evt, cre, rea).
+
+## containerize template .format() KeyError (harness bug)
+`render_containerize` did `containerize.md.tmpl.format(...)` but the template embedded a literal nginx
+block `location /api/ { proxy_pass http://backend:8000; }` — Python `.format()` read `{ proxy_pass … }`
+as a placeholder → `KeyError: ' proxy_pass http'`, crashing every web+backend use case's containerize
+stage. FIXED: escaped the literal braces as `{{ }}`. (Real placeholders {backend}/{web}/… unaffected.)
