@@ -38,7 +38,7 @@ try {
   if (await send.count() > 0) await send.click(); else await p.keyboard.press('Enter')
   await p.waitForTimeout(3000)
   R.msgSent = (await p.getByText(msg, { exact: false }).count()) > 0   // the FULL unique text, not a 20-char prefix
-  const call = p.locator('.cometchat-call-button__voice button, .cometchat-call-button__voice, .cometchat-call-button__video button').first()
+  const call = p.locator('.cometchat-call-buttons__voice button, button[aria-label="Voice call"], .cometchat-call-buttons__video button, button[aria-label="Video call"], .cometchat-call-button__voice').first()
   await call.click()
   await p.waitForTimeout(4000)
   // a REAL call-session surface that appears AFTER the click — NOT `[class*=cometchat-call]`, which

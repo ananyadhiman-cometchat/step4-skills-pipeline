@@ -46,8 +46,8 @@ try {
   await caller.locator('.cometchat-conversation-item, .cometchat-conversations__list-item-wrapper, .cometchat-conversations__list-item, .cometchat-list-item').first().click()
   await caller.waitForTimeout(3000)
   const btnSel = CALL_TYPE === 'video'
-    ? '.cometchat-call-button__video button, .cometchat-call-button__video'
-    : '.cometchat-call-button__voice button, .cometchat-call-button__voice'
+    ? '.cometchat-call-buttons__video button, button[aria-label="Video call"], .cometchat-call-button__video'
+    : '.cometchat-call-buttons__voice button, button[aria-label="Voice call"], .cometchat-call-button__voice'
   const callBtn = caller.locator(btnSel).first()
   await callBtn.click()
   R.callType = CALL_TYPE

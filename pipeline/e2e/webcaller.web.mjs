@@ -27,8 +27,8 @@ try {
   await p.locator('.cometchat-conversation-item, .cometchat-conversations__list-item-wrapper, .cometchat-conversations__list-item, .cometchat-list-item').first().click()
   await p.waitForTimeout(3000)
   const sel = CALL_TYPE === 'video'
-    ? '.cometchat-call-button__video button, .cometchat-call-button__video'
-    : '.cometchat-call-button__voice button, .cometchat-call-button__voice'
+    ? '.cometchat-call-buttons__video button, button[aria-label="Video call"], .cometchat-call-button__video'
+    : '.cometchat-call-buttons__voice button, button[aria-label="Voice call"], .cometchat-call-button__voice'
   await p.locator(sel).first().click()
   R.callStarted = true
   // hold the line while the mobile end receives + accepts
