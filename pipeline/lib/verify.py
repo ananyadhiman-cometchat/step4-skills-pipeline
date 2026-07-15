@@ -375,7 +375,7 @@ def run_twoparty_mobile(platform: str, call_type: str, web_url: str, shot_dir: s
     return last
 
 
-def run_e2e(cmd: str, repo_dir: Path) -> dict:
+def run_e2e(cmd: str, repo_dir: Path, base_url: str = "http://localhost:3000") -> dict:
     if not cmd:
         return {"ran": False, "passed": None, "note": "e2e: not-configured", "tail": ""}
     # The default smoke is a Playwright web test. Only run it where Playwright is actually set up
@@ -388,5 +388,12 @@ def run_e2e(cmd: str, repo_dir: Path) -> dict:
                   if (repo_dir / "package.json").exists() else False)
         if not has_pw:
             return {"ran": False, "passed": None, "note": "e2e: no Playwright setup (non-Node web) — page-200 fallback", "tail": ""}
-    code, out = _run(shlex.split(cmd), cwd=str(repo_dir), timeout=1800)
+    # Point the (parameterised) e2e config at the DEPLOYED web URL, not its dev-server default. Codegen
+    # sets `baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:4200'`; without this the boot smoke
+    # navigates to the dev port (4200) instead of the composed web (3000) and fails on nothing there.
+    env = dict(os.environ)
+    env["E2E_BASE_URL"] = base_url
+    env.setdefault("PLAYWRIGHT_BASE_URL", base_url)
+    env.setdefault("BASE_URL", base_url)
+    code, out = _run(shlex.split(cmd), cwd=str(repo_dir), timeout=1800, env=env)
     return {"ran": True, "passed": code == 0, "exitCode": code, "tail": _tail(out)}

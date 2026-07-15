@@ -610,7 +610,7 @@ def stage_boot(S, uc):
                                          V["backend_health_timeout_s"]) if dockerUp else (False, None)
     web_ok, _ = verify.health_check(V.get("web_url", "http://localhost:3000"), ["/"], 60) if dockerUp else (False, None)
     web_dir = repo / "web" if (repo / "web").exists() else repo
-    smoke = verify.run_e2e(V["e2e"].get("web", ""), web_dir)
+    smoke = verify.run_e2e(V["e2e"].get("web", ""), web_dir, base_url=V.get("web_url", "http://localhost:3000"))
     login_ok = smoke["passed"] if smoke["ran"] else web_ok  # honest fallback: page-200 if no e2e configured
     td = verify.compose_down(repo) if dockerUp else {"dockerCleanupDone": True}
     res = {"useCase": uc["name"], "ucSlug": uc["slug"], "dockerUp": dockerUp, "emulatorUp": False,

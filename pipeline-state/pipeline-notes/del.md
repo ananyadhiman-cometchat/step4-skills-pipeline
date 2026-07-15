@@ -23,3 +23,10 @@ android use cases (fin, evt, cre, rea).
 block `location /api/ { proxy_pass http://backend:8000; }` — Python `.format()` read `{ proxy_pass … }`
 as a placeholder → `KeyError: ' proxy_pass http'`, crashing every web+backend use case's containerize
 stage. FIXED: escaped the literal braces as `{{ }}`. (Real placeholders {backend}/{web}/… unaffected.)
+
+## boot smoke hit the dev port, not the composed web (harness bug)
+Codegen correctly parameterised the Playwright baseURL (`process.env.E2E_BASE_URL ?? 'http://localhost:4200'`),
+but `verify.run_e2e` never set `E2E_BASE_URL`, so the boot login-smoke navigated to the Angular DEV port
+4200 (nothing there) instead of the composed web on 3000 → `loginSmokePassed=False`. FIXED: run_e2e now
+sets `E2E_BASE_URL`/`PLAYWRIGHT_BASE_URL`/`BASE_URL` to the deployed web url (default localhost:3000; boot
+passes `web_url`). (Separately: the Docker daemon crashed on a buildkit I/O error — infra, user restarted it.)
