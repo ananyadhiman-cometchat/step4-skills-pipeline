@@ -76,6 +76,18 @@ def build_gate(kind: str, comp_dir: Path, env: dict | None = None) -> dict:
     never read, so the most-common UC1 gradle failure was structurally unrecoverable."""
     d = str(comp_dir)
     if kind == "web":
+        # CometChat calls guard (proactive): the calls SDK sizes its video grid with an inline
+        # height:calc() referencing two CSS vars it never defines → 0px collapse → the ongoing-call
+        # ResizeObserver throws "Container dimensions and number of tiles must be positive". Define the
+        # vars in the app's global stylesheet BEFORE building so the built bundle ships them; self-heal
+        # records the SDK-packaging gap each time it fires.
+        try:
+            from lib import selfheal
+            _wc = selfheal.ensure_web_call_css_vars(comp_dir)
+            if _wc:
+                print(f"  web build gate: call-css-vars guard → {[x['rule'] for x in _wc]}")
+        except Exception as _e:
+            print(f"  web build gate: call-css-vars guard skipped ({_e})")
         code, out = _npm_gate(comp_dir, ["build", "type-check", "typecheck"])
     elif kind == "mobile":  # React Native — no 'build' script; typecheck is the real gate. NOT lint
         code, out = _npm_gate(comp_dir, ["type-check", "typecheck", "build:check", "tsc"])
@@ -101,6 +113,17 @@ def _ios_gate(d: Path, env: dict | None = None) -> tuple[int, str]:
     pod-based iOS integration failed here with "no such module 'CometChatUIKitSwift'". Mirror them."""
     scheme = d.name
     if (d / "Podfile").exists():
+        # I7 guard (proactive): CometChat's iOS pods reference CometChatStarscream / CometChatCardsSwift
+        # but don't bundle/declare them, so a by-the-book `pod install` yields a target that fails to
+        # compile ("no such module ..."). Inject the two companion pods BEFORE pod install so the build
+        # never hits I7 — and self-heal records the SDK-packaging gap each time it fires.
+        try:
+            from lib import selfheal
+            _ic = selfheal.ensure_ios_companion_pods(d)
+            if _ic:
+                print(f"  ios build gate: I7 companion-pods guard → {[x['rule'] for x in _ic]}")
+        except Exception as _e:
+            print(f"  ios build gate: companion-pods guard skipped ({_e})")
         # pod install is idempotent; run it so the pod module is available to swiftc. Login shell → PATH/rbenv.
         pc, po = _run(["bash", "-lc", "export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8; pod install"], cwd=str(d), env=env)
         ws = next(iter(d.glob("*.xcworkspace")), None)

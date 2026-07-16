@@ -282,6 +282,138 @@ def _fix_pod_modular(ctx) -> tuple[bool, str]:
     return True, "added targeted modular_headers to Podfile"
 
 
+_STARSCREAM_PODSPEC = """Pod::Spec.new do |s|
+  s.name = 'CometChatStarscream'
+  s.version = '1.0.2'
+  s.summary = 'CometChat fork of Starscream (WebSocket) — companion module CometChatSDK imports but does NOT bundle'
+  s.homepage = 'https://www.cometchat.com'
+  s.license = { :type => 'Commercial', :text => 'CometChat' }
+  s.author = 'CometChat'
+  s.platform = :ios, '13.0'
+  s.source = { :http => 'https://library.cometchat.io/ios/v4.0/xcode15/CometChatStarscream_1_0_2.xcframework.zip' }
+  s.vendored_frameworks = 'CometChatStarscream.xcframework'
+end
+"""
+
+
+def _ios_companion_podfiles(ctx) -> list[Path]:
+    """Every iOS Podfile under this component that pulls in CometChatUIKitSwift — the native app's own
+    `ios/Podfile` (or a Podfile at the dir root, as with a native Swift app) AND the Flutter/RN-managed
+    `ios/Podfile`. Only Podfiles that actually reference the UIKit pod need the companion modules."""
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for key in ("comp_dir", "mobile_dir", "repo_dir"):
+        d = ctx.get(key)
+        if not d:
+            continue
+        base = Path(d)
+        for pf in [base / "Podfile", *base.glob("ios/Podfile"), *base.glob("*/ios/Podfile")]:
+            if pf.exists() and pf not in seen:
+                seen.add(pf)
+                try:
+                    if "CometChatUIKitSwift" in pf.read_text():
+                        out.append(pf)
+                except Exception:
+                    pass
+    return out
+
+
+def _fix_ios_companion_pods(ctx) -> tuple[bool, str]:
+    """I7 (recurring gap): CometChatSDK 4.1.x `import`s CometChatStarscream (its WebSocket lib) and
+    CometChatUIKitSwift 5.1.x `import`s CometChatCardsSwift, but the published pods REFERENCE these
+    companion modules without bundling/declaring them → a by-the-book `pod install` yields a target that
+    can't compile ("no such module 'CometChatStarscream' / 'CometChatCardsSwift'"). Add both explicitly:
+    CometChatStarscream 1.0.2 via a local podspec pointing at CometChat's CDN xcframework, and
+    CometChatCardsSwift '~> 1.1' (a normally-published pod that isn't pulled transitively). NOT SPM,
+    NOT an Xcode/Swift-version issue. Runs BEFORE `pod install`, so the build never hits I7."""
+    pods = _ios_companion_podfiles(ctx)
+    if not pods:
+        return False, "no CometChatUIKitSwift Podfile found"
+    inject = ("  pod 'CometChatStarscream', :podspec => 'CometChatStarscream.podspec'  # I7: companion module, not bundled by the SDK pod\n"
+              "  pod 'CometChatCardsSwift', '~> 1.1'                                    # I7: companion module, not pulled transitively\n")
+    patched = 0
+    for pf in pods:
+        t = pf.read_text()
+        if "CometChatStarscream" in t and "CometChatCardsSwift" in t:
+            continue  # both companions already declared — nothing to do
+        (pf.parent / "CometChatStarscream.podspec").write_text(_STARSCREAM_PODSPEC)
+        # Place them right after the UIKit pod (same target); fall back to the first target block.
+        m = re.search(r"^[ \t]*pod ['\"]CometChatUIKitSwift['\"].*\n", t, re.MULTILINE)
+        if m:
+            t = t[:m.end()] + inject + t[m.end():]
+        else:
+            t = re.sub(r"(target ['\"][^'\"]+['\"] do\n)", r"\1" + inject, t, count=1)
+        pf.write_text(t)
+        patched += 1
+    if not patched:
+        return False, "companion pods already declared"
+    return True, f"added CometChatStarscream(podspec)+CometChatCardsSwift to {patched} Podfile(s)"
+
+
+def ensure_ios_companion_pods(comp_dir, slug: str | None = None) -> list[dict]:
+    """Proactive entry point the iOS build gate calls BEFORE `pod install`. Runs the I7 companion-pods
+    guard for a native-iOS component and records the gap (self-heal witnesses it). Returns applied fixes."""
+    d = Path(comp_dir)
+    return preapply({"stage": "build", "family": "ios-native", "comp_dir": str(d),
+                     "mobile_dir": str(d), "repo_dir": str(d.parent),
+                     "slug": slug or d.parent.name, "integrated": False})
+
+
+_CALL_CSS_VARS = """
+/* CometChat calls-SDK gap (self-heal): the video-tile grid is sized with an inline
+   height: calc(100% - var(--cometchat-calls-call-footer-height) - var(--cometchat-calls-call-header-height))
+   but the SDK references those two custom properties and NEVER defines them. An undefined var() in calc()
+   is invalid at computed-value time → height computes to 0px → the ongoing-call grid collapses → the SDK's
+   ResizeObserver throws "Container dimensions and number of tiles must be positive" and the call renders
+   collapsed. Defining the vars makes the calc resolve to a positive height. */
+:root {
+  --cometchat-calls-call-header-height: 60px;
+  --cometchat-calls-call-footer-height: 80px;
+}
+"""
+
+# Global-stylesheet conventions across the web frameworks the pipeline emits (Angular/React/Vue/Next/…).
+_WEB_GLOBAL_STYLES = [
+    "src/styles.scss", "src/styles.sass", "src/styles.css",
+    "app/globals.css", "src/app/globals.css", "styles/globals.css",
+    "src/index.scss", "src/index.css", "src/style.css", "src/global.css", "src/assets/main.css",
+]
+
+
+def _fix_web_call_css_vars(ctx) -> tuple[bool, str]:
+    """The CometChat web **calls** SDK (@cometchat/calls-sdk-javascript) sizes its tile grid with an inline
+    height:calc() referencing --cometchat-calls-call-{header,footer}-height, which it never defines →
+    invalid calc → 0px grid → ResizeObserver throws "Container dimensions and number of tiles must be
+    positive" (verified: undefined-var calc computes to 0px; defined → 674px). Define the two vars in the
+    web app's global stylesheet so the ongoing-call surface lays out instead of collapsing."""
+    d = ctx.get("comp_dir")
+    if not d:
+        return False, "no comp_dir"
+    comp = Path(d)
+    pj = comp / "package.json"
+    try:
+        if "calls-sdk-javascript" not in pj.read_text():
+            return False, "no @cometchat/calls-sdk-javascript dep (calls not integrated)"
+    except Exception:
+        return False, "no package.json"
+    styles = next((comp / rel for rel in _WEB_GLOBAL_STYLES if (comp / rel).exists()), None)
+    if not styles:
+        return False, "no global stylesheet found"
+    t = styles.read_text()
+    if "--cometchat-calls-call-header-height" in t:
+        return False, "call css vars already defined"
+    styles.write_text(t.rstrip() + "\n" + _CALL_CSS_VARS)
+    return True, f"defined call-height CSS vars in {styles.relative_to(comp)}"
+
+
+def ensure_web_call_css_vars(comp_dir, slug: str | None = None) -> list[dict]:
+    """Proactive entry point the WEB build gate calls before building — defines the two CSS vars the calls
+    SDK references-but-never-defines, and records the SDK gap. Returns applied fixes."""
+    d = Path(comp_dir)
+    return preapply({"stage": "build", "family": "web", "comp_dir": str(d), "repo_dir": str(d.parent),
+                     "slug": slug or d.parent.name, "integrated": False})
+
+
 def _fix_disk(ctx) -> tuple[bool, str]:
     """Reclaim disk (UC1 filled it and crashed Docker). Prune build transients."""
     from lib import mobile
@@ -386,6 +518,31 @@ RULES = [
      "gap": "The iOS/native skill should ship use_modular_headers! (or targeted modular headers for "
             "SPTPersistentCache / DVAssetLoaderDelegate) via a config plugin that SURVIVES `expo prebuild` "
             "(which regenerates the Podfile) — otherwise `pod install` fails 'does not define modules'."},
+    {"id": "web-call-css-vars", "phase": "pre", "families": {"web"},
+     "sig": r"Container dimensions and number of tiles must be positive|cometchat-calls-tile-grid",
+     "fix": _fix_web_call_css_vars, "owner": "sdk",
+     "note": "CometChat calls SDK references --cometchat-calls-call-{header,footer}-height in its grid calc() but never defines them → 0px collapse",
+     "gap": "The CometChat web calls SDK (@cometchat/calls-sdk-javascript) sizes its tile-grid <div> with an "
+            "INLINE height: calc(100% - var(--cometchat-calls-call-footer-height) - "
+            "var(--cometchat-calls-call-header-height)) but references those two custom properties WITHOUT ever "
+            "defining them (each appears exactly once — this calc — in the SDK bundle; the UI Kit doesn't define "
+            "them either). An undefined var() in calc() is invalid at computed-value time → height computes to 0px "
+            "→ the ongoing-call grid collapses → the SDK's ResizeObserver throws \"Container dimensions and number "
+            "of tiles must be positive\" and the call renders collapsed (proven: undefined-var calc → 0px, defined "
+            "→ 674px). The SDK must define these variables itself, or use fallbacks in the calc (var(--x, 0px)). "
+            "Workaround (auto-applied by the web build gate): define both in the app's global stylesheet :root."},
+    {"id": "ios-companion-pods", "phase": "pre", "families": {"ios-native", "flutter", "rn"},
+     "sig": r"no such module 'CometChatStarscream'|no such module 'CometChatCardsSwift'|CometChatStarscream|CometChatCardsSwift",
+     "fix": _fix_ios_companion_pods, "owner": "sdk",
+     "note": "I7: CometChat iOS pods reference companion modules (CometChatStarscream/CometChatCardsSwift) without bundling them",
+     "gap": "CometChat's iOS pods are shipped-incomplete: CometChatSDK 4.1.x imports CometChatStarscream (its WebSocket "
+            "lib) and CometChatUIKitSwift 5.1.x imports CometChatCardsSwift, but a by-the-book `pod install` neither "
+            "vends nor declares either — so the target fails to compile with \"no such module 'CometChatStarscream' / "
+            "'CometChatCardsSwift'\". The published UIKit/SDK podspecs must declare these as dependencies (or vend the "
+            "sub-frameworks). Workaround (auto-applied by the build gate): add CometChatStarscream 1.0.2 via a local "
+            "podspec pointing at the CDN xcframework (library.cometchat.io/ios/v4.0/xcode15/"
+            "CometChatStarscream_1_0_2.xcframework.zip) + CometChatCardsSwift '~> 1.1'. This is NOT an Xcode/Swift-version "
+            "issue and NOT fixable by switching to SPM (empty stubs link but crash at launch: Symbol not found WebSocketEvent)."},
     {"id": "disk-full", "phase": "on_fail", "families": None,
      "sig": r"ENOSPC|No space left|disk full|write error", "fix": _fix_disk,
      "note": "UC1: builds filled the disk and crashed Docker", "owner": "harness"},
