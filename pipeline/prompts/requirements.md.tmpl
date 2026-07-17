@@ -68,6 +68,11 @@ Produce a single markdown spec with these sections (concise, concrete, no fluff)
    The seed MUST ALSO include two FIXED automated-call-test users (the harness logs in as these across
    ALL use cases): email `chat-a@{slug}.io` uid `{slug}-cha-001`, and `chat-b@{slug}.io` uid `{slug}-chb-001`,
    both ordinary users, password = the shared seed password. They must be able to open a 1:1 conversation.
+   **The shared seed password MUST be EXACTLY `{Slug}@seed2026!`** (slug with its first letter capitalised —
+   e.g. slug `dat` → `Dat@seed2026!`, `com` → `Com@seed2026!`). Use this SAME literal in the backend
+   `SEED_PASSWORD`, in every client's demo quick-fill buttons, and anywhere else the seed password appears —
+   the automated login harness derives exactly this value, so any other literal (e.g. a generic `Seed1234!`)
+   makes every seeded login 401 and the whole verify chat/call proof fail.
 7. Screen/component map per platform (web + mobile/native). Every client's LOGIN screen MUST expose the
    stable testIDs `email-input`, `password-input`, `login-submit` so the automated login flow is
    stack-independent (web: `data-testid`; RN: `testID`; native: accessibility id). **Flutter: wrap each

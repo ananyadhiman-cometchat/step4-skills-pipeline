@@ -45,7 +45,7 @@ def render_requirements(settings, uc: dict) -> str:
     comps = expand_components(uc)
     non_backend = [c["name"] for c in comps if c["kind"] != "backend"]
     return _tmpl("requirements.md.tmpl").format(
-        name=uc["name"], slug=uc["slug"],
+        name=uc["name"], slug=uc["slug"], Slug=uc["slug"].capitalize(),
         web=uc.get("web", "(Flutter web)"),
         mobile=uc.get("mobile") or uc.get("app") or f"{uc.get('android','')}/{uc.get('ios','')}",
         backend=uc["backend"],

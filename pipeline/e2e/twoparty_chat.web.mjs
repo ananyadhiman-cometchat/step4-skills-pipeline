@@ -53,8 +53,11 @@ try {
   R.aOpened = await openFirstConversation(a.page)   // A watches the thread
   R.bOpened = await openFirstConversation(bb.page)   // B will send into it
 
-  // B sends the unique nonce through the REAL composer (its own socket send)
-  const input = bb.page.locator('.cometchat-message-composer [contenteditable="true"], .cometchat-message-composer__input, .cometchat-message-composer textarea').first()
+  // B sends the unique nonce through the REAL composer (its own socket send).
+  // Selector spans EVERY CometChat composer variant: the standard CometChatMessageComposer AND the
+  // CometChatCompactMessageComposer (class `cometchat-compact-message-composer__input`, a contenteditable
+  // DIV) — the old `.cometchat-message-composer*`-only selector missed the compact one entirely (sent=false).
+  const input = bb.page.locator('[class*="composer" i] [contenteditable="true"], [class*="composer" i][contenteditable="true"], [class*="composer" i] textarea, .cometchat-message-composer__input, .cometchat-compact-message-composer__input').first()
   if (await input.count() > 0) {
     await input.click(); await input.type(NONCE, { delay: 15 })
     const send = bb.page.locator('.cometchat-message-composer__send-button, [class*="send-button" i]').first()

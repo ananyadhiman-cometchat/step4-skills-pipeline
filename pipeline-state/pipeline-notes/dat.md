@@ -36,3 +36,69 @@
   FIX: swapped all icon emoji → `@expo/vector-icons` Ionicons (ships with Expo, no new dep; renders from
   its own bundled font on both platforms and honours `color`). DEPTH STANDARD §D now forbids emoji-as-icons
   so future use cases can't regress. User found this by tapping the sim — the harness cannot auto-tap iOS.
+<!-- note:docker-vm-network-wedged -->
+- **[infra] verify halted: Docker VM networking wedged → base-image metadata timeout.** `verify` failed with
+  `GATE-FAIL[infra]: integrated system did not boot healthy (backend=False web=False)`. Real cause was NOT
+  the app: `docker compose up -d --build` died at
+  `[backend internal] load metadata for docker.io/library/python:3.12-slim → DeadlineExceeded: context
+  deadline exceeded`. Evidence it's the Docker VM, not the network: the HOST reached Docker Hub fine
+  (`auth.docker.io` 200 in 0.25s, `registry-1.docker.io` 401 in 0.6s) while the daemon's own
+  `docker pull python:3.12-slim` hung indefinitely. A stale `com.docker.backend` was lingering — the SAME
+  failure mode seen earlier this project. FIX: quit Docker, `pkill -9 -f com.docker.backend` + helpers,
+  `open -a Docker`, wait for `docker info`, re-run verify.
+  Two harness gaps this exposed:
+  1. **Misleading gate message.** `backend=False web=False` reads like the health checks failed, but they
+     never RAN — they are gated on `dockerUp` (`health_check(...) if dockerUp else (False, None)`), so a
+     dead `compose_up` reports as two dead health checks. The stale baseline containers were still Up and
+     answering 200 the whole time, so nothing about the INTEGRATED app was tested. The gate should
+     distinguish "compose_up failed" from "booted but unhealthy" and surface `boot_tail` (HALT.json's
+     `gate_output` was empty).
+  2. **`--pull=false` retry can't fix a missing base image.** `compose_up` already retries on the
+     `DeadlineExceeded|context deadline exceeded` signature with `docker compose build --pull=false`, but
+     that only skips pulling a NEWER base — BuildKit still resolves registry metadata, and here
+     `python:3.12-slim` was not even cached locally (pruned; only the derived `dat-backend:latest` and
+     `nginx:alpine`/`node:20-alpine` survived). So the retry was structurally incapable of rescuing this.
+     A real retry needs daemon-health/DNS detection (or a warm base-image cache the disk self-heal won't prune).
+
+### auto-recorded verify triage (dat)
+- [harness] cross-party chat proof did not run cleanly — {'aLogin': False, 'bLogin': False, 'aOpened': False, 'bOpened': False, 'sent': False, 'received': False, 'senderEcho': False, 'error': 'TimeoutError: page.waitForFunction: Timeout 20000ms exceeded.', 'chatWorks': False}
+- [coverage] two-party web↔web call matrix incomplete — {'voice': {'callerLogin': False, 'calleeLogin': False, 'callerCallStarted': False, 'calleeRingVisible': False, 'calleeRingInOverlay': False, 'ringOffscreenBottomLeft': False, 'calleeAccepted': False, 'callerOngoing': False, 'calleeOngoing': False, 'c
+- [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)
+
+### auto-recorded verify triage (dat)
+- [harness] cross-party chat proof did not run cleanly — {'aLogin': False, 'bLogin': False, 'aOpened': False, 'bOpened': False, 'sent': False, 'received': False, 'senderEcho': False, 'error': 'TimeoutError: page.waitForFunction: Timeout 20000ms exceeded.', 'chatWorks': False}
+- [coverage] two-party web↔web call matrix incomplete — {'voice': {'callerLogin': False, 'calleeLogin': False, 'callerCallStarted': False, 'calleeRingVisible': False, 'calleeRingInOverlay': False, 'ringOffscreenBottomLeft': False, 'calleeAccepted': False, 'callerOngoing': False, 'calleeOngoing': False, 'c
+- [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)
+<!-- note:web-buildtime-creds-and-seed-pw -->
+- **[harness] verify chat proof failed on TWO cred/auth gaps (both fixed):**
+  1. **Web build-time CometChat creds empty.** `web/.env` shipped `VITE_COMETCHAT_APP_ID=` (empty). Vite
+     inlines `import.meta.env.VITE_*` at build, so the bundle had a blank appId → `init.ts` threw "Missing
+     VITE_COMETCHAT_APP_ID" → SDK never inits. provision writes `.env.cometchat` + compose-env feeds the
+     BACKEND, but nothing filled the WEB build-time cred. FIX: new self-heal `web-cometchat-creds` (pre,
+     family web, when_integrated, owner harness) fills any empty/placeholder VITE_/NEXT_PUBLIC_/REACT_APP_
+     *_COMETCHAT_{APP_ID,REGION,AUTH_KEY} the web .env declares, from the provisioned env; wired into verify
+     before `compose_up --build`. Verified: real 17-char appId baked into the served bundle.
+  2. **Seed-password drift (same class as del/iOS).** dat's spec + backend + web/mobile quick-fill all use
+     `Seed1234!`, but the harness `e2e_password()` derives `Dat@seed2026!` → every seeded login 401'd → the
+     browser proof timed out on `waitForFunction(leave /login)` → mislabeled `sdk=False`. The requirements
+     TEMPLATE said only "password = the shared seed password" without pinning the literal, so codegen chose
+     `Seed1234!`. FIX (two parts): (a) dat gets `"e2ePassword": "Seed1234!"` in use_cases.json so the harness
+     matches the built app; (b) the template now PINS the exact literal `{Slug}@seed2026!` (added `Slug` fmt
+     key) so future codegen matches `e2e_password`'s default and this drift can't recur.
+  Note the misleading verdict: a login/seed 401 surfaces as `sdk=False chatRx=False` because the proof never
+  gets past login to touch the SDK — the harness should distinguish "login failed" from "SDK init failed".
+
+### auto-recorded verify triage (dat)
+- [integration] cross-party message NOT received (real-time socket) — [{'received': False, 'error': None}, {'received': False, 'error': None}]
+- [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)
+- [env] web CALL screens unrenderable headless — two-party WebRTC media can't be negotiated in an automated browser (caller stuck at 'Calling…', callee blank): callee-ringing-voice(not_corner_toast,accept_reject,caller_shown), callee-ongoing-voice(fullscreen,no_app_chrome,no_chat_bleed,controls), callee-ringing-video(not_corner_toast,accept_reject,caller_shown), callee-ongoing-video(fullscreen,no_app_chrome,no_chat_bleed,controls). Call CONNECTION proven by machine evidence (callConnect/twoParty) + native↔native live matrix; these shots are ADVISORY. See gallery /Users/admin/Desktop/automate/runs/dat/_demo/shot-review.html
+<!-- note:proof-composer-selector -->
+- **[harness] cross-party chat proof missed the compact composer.** After the cred + password fixes, the
+  proof got `aOpened/bOpened=true` but `sent=false` → `chatReceive=false`. dat's web uses
+  `CometChatCompactMessageComposer` (valid UIKit component), whose input is a contenteditable DIV
+  `cometchat-compact-message-composer__input` — the proof's selector only matched
+  `.cometchat-message-composer*` (no "compact"), so it never found the input to type into. FIX: broadened
+  the composer-input selector in `e2e/twoparty_chat.web.mjs` to span every variant
+  (`[class*="composer" i] [contenteditable], [class*="composer" i][contenteditable], … __input`). Verified
+  manually: sent=true, **received=true** (A got B's nonce over the live socket) → chatWorks=true. dat's
+  CometChat real-time chat genuinely works; the gap was purely in the test's selector breadth.

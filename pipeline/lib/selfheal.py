@@ -453,6 +453,64 @@ def ensure_expo_android_splash(comp_dir, slug: str | None = None) -> list[dict]:
                      "slug": slug or d.parent.name, "integrated": False})
 
 
+_WEB_CC_KEYS = ("COMETCHAT_APP_ID", "COMETCHAT_REGION", "COMETCHAT_AUTH_KEY")
+_WEB_ENV_PREFIXES = ("VITE_", "NEXT_PUBLIC_", "REACT_APP_")
+
+
+def _cc_placeholder(v: str) -> bool:
+    v = (v or "").strip()
+    return (not v) or ("your" in v.lower()) or ("here" in v.lower()) or v in ("changeme", "xxx", "app-id")
+
+
+def _fix_web_cometchat_creds(ctx) -> tuple[bool, str]:
+    """The web build (Vite/Next/CRA) INLINES CometChat creds at build time from prefixed env vars
+    (VITE_/NEXT_PUBLIC_/REACT_APP_ COMETCHAT_APP_ID). provision writes the real APP_ID to
+    <slug>/.env.cometchat and compose-env feeds the BACKEND, but the web comp's .env is scaffolded with an
+    EMPTY/placeholder *_COMETCHAT_APP_ID → the SDK init throws "Missing VITE_COMETCHAT_APP_ID" and NO chat
+    or call ever works (the web BUILD-time creds are the gap — backend + mobile are covered elsewhere).
+    Fill any empty/placeholder *_COMETCHAT_{APP_ID,REGION,AUTH_KEY} key the web .env ALREADY declares, from
+    the provisioned env. Idempotent; never invents keys the app doesn't read."""
+    comp = ctx.get("comp_dir"); env_file = ctx.get("env_file")
+    if not comp or not env_file:
+        return False, "no comp_dir/env_file"
+    comp = Path(comp); web_env = comp / ".env"
+    if not web_env.exists():
+        ex = comp / ".env.example"
+        if not ex.exists():
+            return False, "no web .env or .env.example"
+        web_env.write_text(ex.read_text())     # seed declared keys so they can be filled
+    prov = {}
+    try:
+        for ln in Path(env_file).read_text().splitlines():
+            ln = ln.strip()
+            if "=" in ln and not ln.startswith("#"):
+                k, v = ln.split("=", 1); prov[k.strip()] = v.strip()
+    except Exception:
+        return False, "could not read provisioned env"
+    lines = web_env.read_text().splitlines(); changed = []
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith("#") or "=" not in s:
+            continue
+        k, v = s.split("=", 1); k = k.strip()
+        for pref in _WEB_ENV_PREFIXES:
+            for cc in _WEB_CC_KEYS:
+                if k == pref + cc and _cc_placeholder(v) and not _cc_placeholder(prov.get(cc, "")):
+                    lines[i] = f"{k}={prov[cc]}"; changed.append(k)
+    if not changed:
+        return False, "web cometchat creds already populated"
+    web_env.write_text("\n".join(lines) + "\n")
+    return True, f"filled web build-time creds: {', '.join(changed)}"
+
+
+def ensure_web_cometchat_creds(comp_dir, env_file, slug: str | None = None) -> list[dict]:
+    """Proactive entry point verify calls before compose_up --build — fills the web comp's build-time
+    CometChat creds from the provisioned env so the SDK can init. comp_dir = the web comp dir."""
+    d = Path(comp_dir)
+    return preapply({"stage": "verify", "family": "web", "comp_dir": str(d), "repo_dir": str(d.parent),
+                     "env_file": str(env_file), "slug": slug or d.parent.name, "integrated": True})
+
+
 def _fix_disk(ctx) -> tuple[bool, str]:
     """Reclaim disk (UC1 filled it and crashed Docker). Prune build transients."""
     from lib import mobile
@@ -594,6 +652,12 @@ RULES = [
      "sig": r"SDK location not found|ANDROID_HOME|Define a valid SDK location|sdk\.dir", "fix": _fix_android_sdk,
      "note": "android gradle build needs sdk.dir/ANDROID_HOME (codegen omits machine-specific local.properties)",
      "owner": "harness"},
+    {"id": "web-cometchat-creds", "phase": "pre", "families": {"web"}, "when_integrated": True,
+     "sig": r"Missing VITE_COMETCHAT|Missing .*COMETCHAT_APP_ID|COMETCHAT_APP_ID.*(null|empty|undefined)",
+     "fix": _fix_web_cometchat_creds, "owner": "harness", "witness": False,
+     "note": "web BUILD-time CometChat creds (VITE_/NEXT_PUBLIC_/REACT_APP_ *_COMETCHAT_APP_ID) left empty by "
+             "codegen — provision writes .env.cometchat + compose-env feeds the backend, but the web .env "
+             "placeholder is never filled, so the SDK init throws and no chat/call works. Fill from provisioned env."},
     {"id": "compose-env", "phase": "pre", "families": None, "when_integrated": True,
      "sig": None, "fix": _fix_compose_env,
      "note": "UC1: inject COMETCHAT_* into the deployment env, not just .env.example", "owner": "skills",

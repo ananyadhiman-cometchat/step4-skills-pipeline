@@ -800,6 +800,14 @@ def stage_verify(S, uc):
                              "env_file": str(uc_env_file(S, uc)), "integrated": True})
     if _ce:
         print(f"  verify compose-env self-heal: {[x['rule'] for x in _ce]}")
+    # The web build INLINES CometChat creds at build time (VITE_/NEXT_PUBLIC_/REACT_APP_ *_COMETCHAT_APP_ID).
+    # compose-env feeds the backend RUNTIME env, but the web comp's .env placeholder is often left empty →
+    # the web SDK init throws "Missing VITE_COMETCHAT_APP_ID" and no chat/call proof can run. Fill it from
+    # the provisioned env BEFORE compose_up --build bakes the image.
+    if (repo / "web").exists():
+        _wc = selfheal.ensure_web_cometchat_creds(repo / "web", uc_env_file(S, uc), uc["slug"])
+        if _wc:
+            print(f"  verify web-creds self-heal: {[x['rule'] for x in _wc]}")
     # A Flutter-unified app serves web statically from app/build/web — host-build the INTEGRATED web
     # (with CometChat + the semantics hook, empty API_URL → nginx /api proxy) BEFORE compose, else the
     # web container serves the stale baseline build and the chat-receive proof runs against the wrong app.
