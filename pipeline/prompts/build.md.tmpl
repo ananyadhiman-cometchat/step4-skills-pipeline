@@ -32,6 +32,13 @@ E2E (so the harness can prove it runs, not just builds):
   `npx playwright test -g @smoke`, so ONLY that deterministic happy-path is gated. Any negative-path
   tests (invalid creds, redirects) must NOT carry @smoke (they can be transient/flaky and must not gate boot).
 - If this is a MOBILE/native component: add a Maestro flow at e2e/login.flow.yaml (launch → login → dashboard).
+- MOBILE (Expo/RN): scaffold on **Expo SDK 52 or newer (React Native >= 0.76)** — NOT SDK 51/RN 0.74.x. The
+  CometChat React Native UIKit that integrate installs (`@cometchat/chat-uikit-react-native` v5.3+, via
+  `@cometchat/cards-react-native`) declares `peer react-native ">=0.76.0"`, so a RN 0.74.x app cannot even
+  build CometChat on iOS (npm ERESOLVE + `react-native-gesture-handler` fails to compile the missing
+  `RCTTurboModuleWithJSIBindings.h`). Pin every RN-ecosystem native dep to the version its Expo SDK expects
+  (use `npx expo install <pkg>`, never a bare `^latest`) — e.g. do NOT hand-pick `react-native-gesture-handler@^3`
+  on an SDK-52 app (SDK 52 → RNGH ~2.20).
 - MOBILE (Expo/RN): if app.json references icon/splash/adaptive-icon/favicon assets, you MUST create valid
   PNG files at those paths (icon 1024x1024) — otherwise `expo prebuild` fails on icon generation. If you
   won't create real assets, OMIT the icon/splash keys from app.json so Expo uses its defaults.
