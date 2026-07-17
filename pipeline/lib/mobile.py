@@ -270,8 +270,13 @@ def boot_ios(device=None) -> bool:
 
 def build_ios(mobile_dir: Path, api_url: str) -> dict:
     ios = mobile_dir / "ios"
-    ws = next(iter(ios.glob("*.xcworkspace")), None)
-    scheme = ws.stem if ws else "Marketplace"
+    # Derive the scheme from the .xcworkspace if present, else the ALWAYS-present .xcodeproj — NEVER a
+    # hardcoded "Marketplace". `pod install` (below) creates <scheme>.xcworkspace, but on a freshly
+    # `expo prebuild`-ed project no workspace exists YET at this point, so globbing only for *.xcworkspace
+    # fell back to "Marketplace" and xcodebuild died "'Marketplace.xcworkspace' does not exist". The
+    # workspace/project/scheme all share the app name, so the xcodeproj stem is the correct scheme.
+    anchor = next(iter(ios.glob("*.xcworkspace")), None) or next(iter(ios.glob("*.xcodeproj")), None)
+    scheme = anchor.stem if anchor else "Marketplace"
     # `clean build` so the embedded JS bundle regenerates with the current EXPO_PUBLIC_API_URL.
     # `-destination generic/platform=iOS Simulator` is REQUIRED on newer Xcode (16/26): with only
     # `-sdk iphonesimulator` and no destination, xcodebuild aborts "Found no destinations for the scheme

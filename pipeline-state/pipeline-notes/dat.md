@@ -102,3 +102,19 @@
   (`[class*="composer" i] [contenteditable], [class*="composer" i][contenteditable], … __input`). Verified
   manually: sent=true, **received=true** (A got B's nonce over the live socket) → chatWorks=true. dat's
   CometChat real-time chat genuinely works; the gap was purely in the test's selector breadth.
+
+### auto-recorded verify triage (dat)
+- [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)
+- [env] web CALL screens unrenderable headless — two-party WebRTC media can't be negotiated in an automated browser (caller stuck at 'Calling…', callee blank): callee-ringing-voice(not_corner_toast,accept_reject,caller_shown), callee-ongoing-voice(fullscreen,no_app_chrome,no_chat_bleed,controls), callee-ringing-video(not_corner_toast,accept_reject,caller_shown), callee-ongoing-video(fullscreen,no_app_chrome). Call CONNECTION proven by machine evidence (callConnect/twoParty) + native↔native live matrix; these shots are ADVISORY. See gallery /Users/admin/Desktop/automate/runs/dat/_demo/shot-review.html
+<!-- note:rn-ios-integrated-build-chain -->
+- **[harness/codegen] Integrated RN iOS build needed a chain of native fixes** (found while capturing the
+  icon-fix screenshot). In order: (1) `ios/` had no Podfile/xcworkspace after integrate → needs `expo
+  prebuild -p ios`; (2) deployment target 13.4 too low for netinfo/CometChat → bumped
+  `Podfile.properties.json` `ios.deploymentTarget=16.0`; (3) Swift CometChat pods can't be static libs →
+  `pod-modular` self-heal (`:modular_headers => true` for SPTPersistentCache/DVAssetLoaderDelegate); (4)
+  **`build_ios` bug**: it globbed `*.xcworkspace` at function ENTRY, before its own `pod install` creates it,
+  so a freshly-prebuilt project fell back to scheme "Marketplace" → `'Marketplace.xcworkspace' does not
+  exist`. FIXED: derive the scheme from the always-present `*.xcodeproj` when no workspace exists yet. (5)
+  Then the hard stop: the CometChat-RN-version incompat above (see gaps/dat.md) — not fixable without a
+  version-alignment decision. NOTE (1)-(3) get wiped by `expo prebuild` (CNG) — the durable form is an
+  expo config plugin, not a post-prebuild edit.
