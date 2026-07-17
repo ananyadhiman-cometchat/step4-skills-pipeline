@@ -157,6 +157,15 @@ def boot_android(avd="Pixel_10") -> bool:
 def build_android(mobile_dir: Path, api_url: str) -> dict:
     andro = mobile_dir / "android"
     (andro / "local.properties").write_text(f"sdk.dir={SDK}\n")
+    # RN/Expo prebuild references @color/splashscreen_background but often omits it from colors.xml →
+    # assembleRelease resource-linking fails. Proactively define it (idempotent, records the codegen gap).
+    try:
+        from lib import selfheal
+        fixes = selfheal.ensure_expo_android_splash(mobile_dir)
+        if fixes:
+            print(f"  self-heal (android splash): {[f['rule'] for f in fixes]}")
+    except Exception as e:
+        print(f"  self-heal (android splash) skipped: {e}")
     # `clean` is REQUIRED: EXPO_PUBLIC_API_URL is inlined into the JS bundle at bundle time, but a plain
     # assembleRelease reuses the cached bundle task (env vars don't invalidate it) → stale API URL.
     cmd = (f'export JAVA_HOME="{JDK17}"; export ANDROID_HOME="{SDK}"; export ANDROID_SDK_ROOT="{SDK}"; '
@@ -262,10 +271,14 @@ def build_ios(mobile_dir: Path, api_url: str) -> dict:
     ios = mobile_dir / "ios"
     ws = next(iter(ios.glob("*.xcworkspace")), None)
     scheme = ws.stem if ws else "Marketplace"
-    # `clean build` so the embedded JS bundle regenerates with the current EXPO_PUBLIC_API_URL
+    # `clean build` so the embedded JS bundle regenerates with the current EXPO_PUBLIC_API_URL.
+    # `-destination generic/platform=iOS Simulator` is REQUIRED on newer Xcode (16/26): with only
+    # `-sdk iphonesimulator` and no destination, xcodebuild aborts "Found no destinations for the scheme
+    # '<x>' and action clean" before it builds. The generic simulator destination needs no booted sim.
     cmd = (f'{UTF8}; pod install; export EXPO_PUBLIC_API_URL="{api_url}"; '
            f'xcodebuild -workspace {scheme}.xcworkspace -scheme {scheme} -configuration Release '
-           f'-sdk iphonesimulator -derivedDataPath /tmp/iosbuild-{mobile_dir.parent.name} -quiet clean build')
+           f"-sdk iphonesimulator -destination 'generic/platform=iOS Simulator' "
+           f'-derivedDataPath /tmp/iosbuild-{mobile_dir.parent.name} -quiet clean build')
     code, out = _sh(cmd, cwd=str(ios))
     app = next(Path(f"/tmp/iosbuild-{mobile_dir.parent.name}/Build/Products").glob("Release-*/*.app"), None) \
         if code == 0 else None

@@ -414,6 +414,45 @@ def ensure_web_call_css_vars(comp_dir, slug: str | None = None) -> list[dict]:
                      "slug": slug or d.parent.name, "integrated": False})
 
 
+def _fix_expo_android_splash(ctx) -> tuple[bool, str]:
+    """RN/Expo prebuild emits res/drawable/splashscreen.xml referencing @color/splashscreen_background, but
+    the generated res/values/colors.xml frequently OMITS that color → release `assembleRelease` dies at
+    resource-linking with "Android resource linking failed: resource color/splashscreen_background not
+    found" (a plain debug/JS build passes, so it only surfaces on the release APK the demo builds). Define
+    the missing color (idempotent) so the splash drawable resolves. Codegen/app gap, not a CometChat one."""
+    d = ctx.get("comp_dir")
+    if not d:
+        return False, "no comp_dir"
+    res = Path(d) / "android" / "app" / "src" / "main" / "res"
+    drawable = res / "drawable" / "splashscreen.xml"
+    colors = res / "values" / "colors.xml"
+    try:
+        if not drawable.exists() or "splashscreen_background" not in drawable.read_text():
+            return False, "no splashscreen_background reference (nothing to fix)"
+    except Exception:
+        return False, "could not read splashscreen.xml"
+    line = '  <color name="splashscreen_background">#ffffff</color>\n'
+    if colors.exists():
+        t = colors.read_text()
+        if "splashscreen_background" in t:
+            return False, "splashscreen_background already defined"
+        t = t.replace("</resources>", line + "</resources>") if "</resources>" in t \
+            else t.rstrip() + "\n<resources>\n" + line + "</resources>\n"
+        colors.write_text(t)
+    else:
+        colors.parent.mkdir(parents=True, exist_ok=True)
+        colors.write_text("<resources>\n" + line + "</resources>\n")
+    return True, "defined splashscreen_background in android colors.xml"
+
+
+def ensure_expo_android_splash(comp_dir, slug: str | None = None) -> list[dict]:
+    """Proactive entry point the RN android build calls before `assembleRelease` — defines the splash color
+    the expo prebuild references-but-omits, so resource linking doesn't fail. comp_dir = the mobile dir."""
+    d = Path(comp_dir)
+    return preapply({"stage": "build", "family": "rn", "comp_dir": str(d), "repo_dir": str(d.parent),
+                     "slug": slug or d.parent.name, "integrated": False})
+
+
 def _fix_disk(ctx) -> tuple[bool, str]:
     """Reclaim disk (UC1 filled it and crashed Docker). Prune build transients."""
     from lib import mobile
@@ -543,6 +582,11 @@ RULES = [
             "podspec pointing at the CDN xcframework (library.cometchat.io/ios/v4.0/xcode15/"
             "CometChatStarscream_1_0_2.xcframework.zip) + CometChatCardsSwift '~> 1.1'. This is NOT an Xcode/Swift-version "
             "issue and NOT fixable by switching to SPM (empty stubs link but crash at launch: Symbol not found WebSocketEvent)."},
+    {"id": "expo-android-splash-color", "phase": "pre", "families": {"rn"},
+     "sig": r"resource color/splashscreen_background not found|splashscreen_background", "fix": _fix_expo_android_splash,
+     "note": "RN/Expo prebuild references @color/splashscreen_background in splashscreen.xml but omits it from "
+             "colors.xml → release assembleRelease resource-linking fails; define the color (codegen gap).",
+     "owner": "harness"},
     {"id": "disk-full", "phase": "on_fail", "families": None,
      "sig": r"ENOSPC|No space left|disk full|write error", "fix": _fix_disk,
      "note": "UC1: builds filled the disk and crashed Docker", "owner": "harness"},
