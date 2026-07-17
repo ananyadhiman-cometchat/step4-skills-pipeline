@@ -260,7 +260,8 @@ def install_launch_shot_android(apk: str, out_png: str, pkg=None) -> bool:
 
 
 # ---------- iOS (standalone release .app) ----------
-def boot_ios(device="iPhone 16") -> bool:
+def boot_ios(device=None) -> bool:
+    device = _resolve_ios_device(device)          # "iPhone 16" may not exist on this Xcode — resolve it
     subprocess.run(["xcrun", "simctl", "boot", device], capture_output=True)
     subprocess.run(["open", "-a", "Simulator"], capture_output=True)
     subprocess.run(["xcrun", "simctl", "bootstatus", device], capture_output=True, timeout=180)
@@ -285,7 +286,26 @@ def build_ios(mobile_dir: Path, api_url: str) -> dict:
     return {"platform": "ios", "exitCode": code, "app": str(app) if app else None, "tail": _tail(out)}
 
 
-def install_launch_shot_ios(app: str, out_png: str, bundle=None, device="iPhone 16") -> bool:
+def _resolve_ios_device(preferred: str | None = None) -> str:
+    """Pick a simulator that ACTUALLY exists on this machine. A hardcoded name (the old "iPhone 16"
+    default) silently misses when the installed Xcode ships a different device set — here only "iPhone 17"
+    exists, so simctl install/launch no-op'd and every iOS screenshot came back empty/stale. Prefer: the
+    requested name (if available) → an already-Booted iPhone → the first available iPhone."""
+    try:
+        out = subprocess.run(["xcrun", "simctl", "list", "devices", "available"],
+                             text=True, capture_output=True, timeout=30).stdout
+    except Exception:
+        return preferred or "iPhone 16"
+    lines = [l.strip() for l in out.splitlines() if "iPhone" in l and "(" in l]
+    names = [l.split(" (")[0].strip() for l in lines]
+    if preferred and preferred in names:
+        return preferred
+    booted = next((l.split(" (")[0].strip() for l in lines if "Booted" in l), None)
+    return booted or (names[0] if names else (preferred or "iPhone 16"))
+
+
+def install_launch_shot_ios(app: str, out_png: str, bundle=None, device=None) -> bool:
+    device = _resolve_ios_device(device)                          # never trust a hardcoded sim name
     bundle = bundle or _app_bundle_id(app) or "com.mkt.mobile"   # derive the REAL bundle from the .app
     subprocess.run(["xcrun", "simctl", "terminate", device, bundle], capture_output=True)
     subprocess.run(["xcrun", "simctl", "uninstall", device, bundle], capture_output=True)  # clean install
@@ -299,7 +319,8 @@ def install_launch_shot_ios(app: str, out_png: str, bundle=None, device="iPhone 
 
 
 # ---------- teardown ----------
-def teardown_mobile(ios_bundle=None, android_pkg=None, device="iPhone 16"):
+def teardown_mobile(ios_bundle=None, android_pkg=None, device=None):
+    device = _resolve_ios_device(device)          # same stale-sim-name trap as boot/install
     if ios_bundle:
         subprocess.run(["xcrun", "simctl", "uninstall", device, ios_bundle], capture_output=True)
     subprocess.run(["xcrun", "simctl", "shutdown", device], capture_output=True)
