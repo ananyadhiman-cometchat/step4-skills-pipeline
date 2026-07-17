@@ -19,6 +19,11 @@ sections below are expanded to enforce each one:
   D. IMAGES / AVATARS / ASSETS. Every user has an avatar_url; every entity that realistically has a picture
      carries an image_url (use a STABLE placeholder image service or bundled assets — never hotlinks that
      can 404). The demo chat flow MUST send at least one IMAGE/media message, not text only.
+     ICONS MUST come from a real icon font / library (React Native: `@expo/vector-icons` — ships with Expo,
+     no extra dep; web: an icon set or inline SVG) or SVG assets. NEVER use raw EMOJI characters as UI icons
+     (tab bars, buttons, logos, empty states). Emoji depend on a platform emoji font: they render as
+     missing-glyph boxes on iOS (a multi-codepoint emoji like the U+2764+U+FE0F heart tofus as TWO boxes),
+     Android's font fallback hides the bug, and emoji cannot be tinted by an active/inactive color prop.
   E. EMPTY / LOADING / ERROR states. Every list and detail screen specifies all three. A blank screen with
      no empty-state is a defect, not a neutral default.
 

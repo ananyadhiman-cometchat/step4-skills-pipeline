@@ -26,3 +26,13 @@
   hearts). Same RN bundle both platforms, so this is an iOS font/asset-resolution gap in the generated app,
   not a build failure. Minor/cosmetic — recorded for the codegen to emit an asset-backed logo instead of a
   glyph that can tofu on iOS.
+<!-- note:emoji-as-icons -->
+- **[codegen] Raw EMOJI used as UI icons → all icons tofu on iOS.** The generated RN app used emoji
+  characters as icons (tab bar `🔍 💞 👤 🛡 ⚖️`, `❤️ Like` buttons, `💞` logo, `🌸/✅` empty states,
+  `⛔/🗑/⏸` actions). Emoji need a platform emoji font: on the iOS sim EVERY one rendered as a
+  missing-glyph "?" box (`❤️` = U+2764+U+FE0F tofu'd as TWO boxes), while Android's font fallback hid it
+  entirely — so a web+Android-only check would have shipped this. Bonus bug: `tabBarIcon: () =>` ignored
+  the `color` param, so emoji tabs could never show the active/inactive tint.
+  FIX: swapped all icon emoji → `@expo/vector-icons` Ionicons (ships with Expo, no new dep; renders from
+  its own bundled font on both platforms and honours `color`). DEPTH STANDARD §D now forbids emoji-as-icons
+  so future use cases can't regress. User found this by tapping the sim — the harness cannot auto-tap iOS.
