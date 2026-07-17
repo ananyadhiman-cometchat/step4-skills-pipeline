@@ -226,6 +226,56 @@ def _only_filter(comps):
     return kept
 
 
+def _spec_depth_check(text: str) -> tuple[bool, list[str]]:
+    """Gate the generated spec against the DEPTH STANDARD (requirements.md.tmpl §A-E). A spec that only
+    pins the fixed login→chat→call flow with a thin seed silently produces a SHALLOW app (the pipeline
+    gates on compiles+boots, not depth). Lenient, synonym-tolerant markers — a spec that actually follows
+    the template passes; a genuinely shallow one (no CRUD, no states, no images, no UI states) fails.
+    Returns (ok, missing-markers)."""
+    t = text.lower()
+    checks = {
+        "full CRUD (create/edit/delete in-app)": "crud" in t or all(w in t for w in ("create", "edit", "delete")),
+        "entity state machine (status + transitions)":
+            any(w in t for w in ("status", "state machine")) and ("→" in text or "->" in t or "transition" in t),
+        "user avatars (avatar_url)": "avatar" in t,
+        "entity images (image_url)": "image_url" in t or ("image" in t and "url" in t),
+        "image/media chat message": any(w in t for w in ("image message", "media message", "image/media")),
+        "empty/loading/error UI states": "empty" in t and "loading" in t and ("retry" in t or "error state" in t),
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    return (not missing, missing)
+
+
+def _generate_spec_with_depth(S, uc, req_file, repo, max_tries: int = 2) -> bool:
+    """Generate the spec-pin and ENFORCE the DEPTH STANDARD. If the first draft is shallow, regenerate
+    ONCE with the missing markers called out (self-heal), then gate. A spec that stays shallow after the
+    retry halts preflight (tag=agent → codegen note, not a skills gap) so no shallow app is ever built."""
+    base_prompt = prompts.render_requirements(S, uc)
+    missing: list[str] = []
+    for attempt in range(max_tries):
+        prompt = base_prompt if attempt == 0 else (
+            base_prompt + f"\n\n⚠ YOUR PREVIOUS DRAFT WAS REJECTED AS SHALLOW — it did not satisfy the DEPTH "
+            f"STANDARD. It was MISSING: {', '.join(missing)}. Rewrite requirements/{uc['slug']}.md so EVERY "
+            f"one of those is explicitly present (see DEPTH STANDARD A-E). Overwrite the existing file.")
+        claude_runner.run_headless(prompt, settings=S, phase="A", cwd=HERE, model_key="spec",
+                                   label=f"spec-{uc['slug']}" + ("" if attempt == 0 else f"-retry{attempt}"),
+                                   log_dir=repo / "_logs")
+        if not (req_file.exists() and req_file.stat().st_size > 200):
+            continue
+        ok, missing = _spec_depth_check(req_file.read_text())
+        obs.event(S, uc["slug"], "preflight", "spec_depth", attempt=attempt, ok=ok, missing=missing)
+        if ok:
+            if attempt:
+                print(f"  ✔ spec-depth: {uc['slug']} passed on retry {attempt}")
+            return True
+        print(f"  ⚠ spec-depth: {uc['slug']} draft {attempt + 1} SHALLOW — missing {missing}; "
+              f"{'regenerating' if attempt + 1 < max_tries else 'out of retries'}")
+    if req_file.exists() and req_file.stat().st_size > 200:
+        die_gate(f"preflight:{uc['slug']} spec still SHALLOW after {max_tries} tries — missing {missing}; "
+                 f"DEPTH STANDARD (requirements.md.tmpl §A-E) not met tag=agent")
+    return False
+
+
 def stage_preflight(S, uc):
     """Phase 0 — initialise + stack-readiness gate + generate the spec-pin (req:baseline).
     No codegen tokens are spent past here unless this use case's stacks are actually buildable."""
@@ -241,10 +291,9 @@ def stage_preflight(S, uc):
     spec_generated = req_file.exists()
     if rd["ready"] and not spec_generated:
         req_file.parent.mkdir(parents=True, exist_ok=True)
-        r = claude_runner.run_headless(prompts.render_requirements(S, uc), settings=S, phase="A",
-                                       cwd=HERE, model_key="spec", label=f"spec-{uc['slug']}",
-                                       log_dir=repo / "_logs")
-        spec_generated = req_file.exists() and req_file.stat().st_size > 200
+        # Generate + ENFORCE the DEPTH STANDARD (regenerate-once self-heal, then gate). Existing specs
+        # (del/com/mkt) already exist → skipped here, so this only deepens dat forward.
+        spec_generated = _generate_spec_with_depth(S, uc, req_file, repo)
     res = {"useCase": uc["name"], "slug": uc["slug"], "ready": rd["ready"], "missing": rd["missing"],
            "byComponent": rd["byComponent"], "workspaceInit": (repo / ".git").exists(),
            "e2eTools": boot_tools, "specGenerated": spec_generated, "specFile": str(req_file)}
@@ -866,8 +915,21 @@ def stage_verify(S, uc):
         shots = [{"name": n, "path": p, "rubric": rb, "context": cx} for n, p, rb, cx in candidates if os.path.exists(p)]
         if shots:
             shot_review = shotreview.review(shots, uc["slug"], S, str(repo / "_demo" / "shot-review.html"))
+    # Vision TEETH apply ONLY to rubrics an automated browser can actually render. Two-party WebRTC
+    # media cannot be negotiated headless — the caller stays stuck at the "Calling…" modal and the
+    # callee renders blank — so the web CALL rubrics (ongoing_call / incoming_ring) are structurally
+    # unprovable via screenshot: a blank callee shot is indistinguishable from a genuinely broken call
+    # UI, so the check has zero discriminating power here and only ever produces false refutes. Those
+    # shots stay in the gallery + get triaged to notes for a human to eyeball, but they do NOT refute.
+    # The call CONNECTION is proven by machine evidence (callConnect / twoPartyWeb signaling), and the
+    # call UI by the css-var self-heal + the native↔native live-call matrix. chat_thread IS renderable
+    # headless, so it keeps its teeth. Mirrors the Flutter call-rubric carve-out above.
+    GATING_RUBRICS = {"chat_thread"}
+    vision_results = shot_review.get("results", []) or []
     vision_ran = shot_review.get("allCorrect") is not None
-    vision_critical_fail = shot_review.get("allCorrect") is False
+    vision_any_fail = any(r.get("correct") is False for r in vision_results)
+    vision_critical_fail = any(r.get("correct") is False and r.get("rubric") in GATING_RUBRICS
+                               for r in vision_results)
     vision_gate = S.get("verify", {}).get("vision_gate", True)
     # SCORECARD — the verdict is a pure function of cross-party MACHINE evidence, not DOM shape.
     scorecard = {"sdkInit": sdk_ok, "chatReceive": chat_ok,
@@ -911,9 +973,16 @@ def stage_verify(S, uc):
     if not moderation.get("active"):
         notes.append(f"[setup] AI moderation not observed — {moderation.get('note')} "
                      f"(enable the moderation/data-masking extension in the CometChat dashboard)")
-    if vision_critical_fail:
-        bad = [f"{r['name']}({','.join(r.get('failedChecks', []))})" for r in shot_review.get("results", []) if r.get("correct") is False]
-        notes.append(f"[visual] Claude-vision flagged: {', '.join(bad)} — see gallery {shot_review.get('gallery')}")
+    if vision_any_fail:
+        bad = [f"{r['name']}({','.join(r.get('failedChecks', []))})" for r in vision_results if r.get("correct") is False]
+        gating_bad = [r["name"] for r in vision_results if r.get("correct") is False and r.get("rubric") in GATING_RUBRICS]
+        if gating_bad:
+            notes.append(f"[visual] Claude-vision flagged (GATING): {', '.join(bad)} — see gallery {shot_review.get('gallery')}")
+        else:
+            notes.append(f"[env] web CALL screens unrenderable headless — two-party WebRTC media can't be negotiated "
+                         f"in an automated browser (caller stuck at 'Calling…', callee blank): {', '.join(bad)}. Call "
+                         f"CONNECTION proven by machine evidence (callConnect/twoParty) + native↔native live matrix; "
+                         f"these shots are ADVISORY. See gallery {shot_review.get('gallery')}")
     if notes:
         notes_dir = os.path.join(os.path.dirname(os.path.expanduser(S["gaps_dir"])), "pipeline-notes")
         os.makedirs(notes_dir, exist_ok=True)

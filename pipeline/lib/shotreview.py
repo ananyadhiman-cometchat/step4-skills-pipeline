@@ -72,7 +72,7 @@ def review(shots: list[dict], slug: str, settings: dict, out_html: str,
         f'{"ALL CORRECT" if allCorrect else "ISSUES FOUND"}</b>'
         f'{" · ⚠ VISUAL CHANGES" if anyChanged else ""}</p>{body}</body></html>')
     # compact machine summary (no base64) for state
-    summary = [{"name": r["name"], "correct": r["vision"].get("overallPass"),
+    summary = [{"name": r["name"], "rubric": r.get("rubric"), "correct": r["vision"].get("overallPass"),
                 "baseline": r["baseline"].get("status"),
                 "failedChecks": [c["id"] for c in r["vision"].get("checks", []) if not c.get("pass")]}
                for r in results]

@@ -3,11 +3,39 @@ Write a SPEC-PIN that all platforms will obey, so the web/{a}/{b} clients + back
 
 Stacks: web={web} · mobile/native={mobile} · backend={backend}.
 
+DEPTH STANDARD — NON-NEGOTIABLE. The app you are speccing must be WELL-ROUNDED and SELF-SUFFICIENT, not a
+thin click-through demo. The pipeline only gates on "compiles + boots", so a shallow spec silently ships a
+shallow app — do NOT let that happen. Every spec you write MUST mandate all of the following, and the
+sections below are expanded to enforce each one:
+  A. FULL CRUD per core entity. Pick 2-3 CORE entities. Each needs create + list + detail + edit +
+     delete/archive AND its real-world STATE MACHINE (e.g. draft→active→completed→cancelled). Users CREATE
+     and manage records IN THE APP — never a view-only tour of pre-seeded rows.
+  B. ROLE-COMPLETE flows. Every RBAC role can do its ENTIRE job in-app, including creating/managing the
+     records it owns. No role is view-only unless view-only is genuinely its whole job. State, per role,
+     the complete set of actions it performs.
+  C. RICH SEED. 3-5 records PER core entity, spanning ALL states of its state machine (not one happy row),
+     so every list screen shows realistic content on first load. Entities cross-reference coherently
+     (e.g. an order → a product + a buyer + a seller, all seeded).
+  D. IMAGES / AVATARS / ASSETS. Every user has an avatar_url; every entity that realistically has a picture
+     carries an image_url (use a STABLE placeholder image service or bundled assets — never hotlinks that
+     can 404). The demo chat flow MUST send at least one IMAGE/media message, not text only.
+  E. EMPTY / LOADING / ERROR states. Every list and detail screen specifies all three. A blank screen with
+     no empty-state is a defect, not a neutral default.
+
 Produce a single markdown spec with these sections (concise, concrete, no fluff):
 1. Product summary — 2-3 lines on what "{name}" does.
 2. RBAC roles — 3-5 roles with permissions (one will be the login-smoke role).
-3. Core entities + data model — tables/fields.
-4. Key user flows — including the fixed flow: login → open a conversation → send a message → start a call.
+3. Core entities + data model — tables/fields for EACH of the 2-3 core entities. Each entity MUST include:
+   an `id` (UID prefixed "{slug}-"), an owner/creator reference, a `status` column with its ALLOWED VALUES
+   and legal transitions (the state machine), created/updated timestamps, and an `image_url` (entities) /
+   `avatar_url` (users) where realistic. Then add a CRUD MATRIX table — entity ×
+   {{create, list, detail, edit, delete/archive}} × which ROLE(s) may perform each action. Every core
+   entity must have a real in-app create + edit + delete/archive owner, not merely list/detail.
+4. Key user flows — one end-to-end flow PER ROLE that exercises that role's FULL CRUD (create a record →
+   see it in the list → open its detail → edit it → advance its state → delete/archive it). Do NOT omit the
+   create/edit/delete legs — they are what makes the app non-shallow. PLUS the fixed automation flow, now
+   with a media step: login → open a conversation → send a TEXT message → send an IMAGE/media message →
+   start a call.
 5. ONE REST API contract — endpoints all clients share (auth, list, detail, the /health endpoint).
    OBEY these CANONICAL conventions so backend signatures stay CONSISTENT across ALL use cases
    (do not reinvent per use case — only the resource nouns change):
@@ -25,8 +53,12 @@ Produce a single markdown spec with these sections (concise, concrete, no fluff)
      bundled `.env` asset via flutter_dotenv (declare `- .env` under assets) OR from `--dart-define` — pick ONE
      and the app must fall back to the emulator host default (`http://10.0.2.2:8080`) if unset.
    Document the use-case-specific resources on top of this shared skeleton — same shapes, different nouns.
-6. Namespaced seed — ~4-6 users, UIDs prefixed "{slug}-", one per role. Seed/test emails MUST use a
-   real, non-reserved domain (e.g. user@{slug}.io). Do NOT use .test/.example/.invalid/.local/.localhost —
+6. Namespaced seed — ~4-6 users, UIDs prefixed "{slug}-", one per role, EACH with a real `avatar_url`.
+   ALSO seed 3-5 records PER core entity spanning ALL of that entity's states (so no list screen is empty
+   on first load), each with a realistic `image_url` and cross-references to the seeded users/entities.
+   The seed script must be idempotent and populate both the backend DB and the demo accounts' data.
+   Seed/test emails MUST use a real, non-reserved domain (e.g. user@{slug}.io). Do NOT use
+   .test/.example/.invalid/.local/.localhost —
    strict validators (Pydantic EmailStr, etc.) reject reserved TLDs and login will 422 on the app's own seed data.
    The seed MUST ALSO include two FIXED automated-call-test users (the harness logs in as these across
    ALL use cases): email `chat-a@{slug}.io` uid `{slug}-cha-001`, and `chat-b@{slug}.io` uid `{slug}-chb-001`,
@@ -41,6 +73,11 @@ Produce a single markdown spec with these sections (concise, concrete, no fluff)
    html` flag was removed in 3.44) so there is no real DOM** — call `SemanticsBinding.instance.ensureSemantics()`
    (or add a top-level `Semantics` wrapper) at startup so Flutter emits its accessibility DOM (`flt-semantics`
    tree with `aria-label`/`flt-semantics-identifier`), which is what web automation queries to drive login.
+8. UI states + assets — for EVERY list and detail screen, specify the EMPTY state (copy + primary
+   call-to-action), the LOADING state (skeleton/spinner), and the ERROR state (message + retry). Name the
+   exact placeholder image source used for avatars and entity images (e.g. a stable avatar/image service or
+   bundled assets). Chat must render IMAGE messages inline (the demo sends one). These states are part of
+   the contract, not an afterthought.
 
 Save the finished spec to the file requirements/{slug}.md in the current directory (create it).
 Output only a one-line confirmation after saving.
