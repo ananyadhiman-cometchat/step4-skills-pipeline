@@ -454,7 +454,11 @@ def ensure_expo_android_splash(comp_dir, slug: str | None = None) -> list[dict]:
 
 
 _WEB_CC_KEYS = ("COMETCHAT_APP_ID", "COMETCHAT_REGION", "COMETCHAT_AUTH_KEY")
-_WEB_ENV_PREFIXES = ("VITE_", "NEXT_PUBLIC_", "REACT_APP_")
+# EXPO_PUBLIC_ covers React Native / Expo (mobile) — same build-time-inlined-cred gap as web: the RN app
+# reads process.env.EXPO_PUBLIC_COMETCHAT_APP_ID, and if mobile/.env is missing/empty CometChat init hangs
+# (the Conversations list spins forever). Validated on dat: mobile/.env didn't exist (only .env.example
+# held the real creds) → CometChat never logged in until .env was seeded.
+_WEB_ENV_PREFIXES = ("VITE_", "NEXT_PUBLIC_", "REACT_APP_", "EXPO_PUBLIC_")
 
 
 def _cc_placeholder(v: str) -> bool:

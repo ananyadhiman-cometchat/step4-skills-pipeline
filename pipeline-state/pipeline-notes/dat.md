@@ -118,3 +118,25 @@
   Then the hard stop: the CometChat-RN-version incompat above (see gaps/dat.md) — not fixable without a
   version-alignment decision. NOTE (1)-(3) get wiped by `expo prebuild` (CNG) — the durable form is an
   expo config plugin, not a post-prebuild edit.
+<!-- note:demo-users-not-cometchat-provisioned -->
+- **[integration] App demo accounts are NOT provisioned as CometChat users → mobile chat spins forever.**
+  Runtime-validating dat mobile: logging in via the Member/Admin/Guest demo quick-fill, the Chat tab's
+  CometChat Conversations list spins indefinitely. Cause: `dat-mem-001` (member1@dat.io) returns HTTP 404
+  from the CometChat REST API — the CometChat app only has the 5 defaults + the chat-test pair
+  (dat-cha-001/dat-chb-001) + 2 mod-probes (9 users total). The backend seed creates demo users in its OWN
+  DB but never creates them as CometChat users, so `CometChatUIKit.login({authToken})` fails silently (the
+  provider only console.warns) and the conversation list never resolves. This means EVERY real demo login
+  (except the two chat-test users) has broken chat. FIX: the backend must create the CometChat user (REST
+  createUser, idempotent) on signup/seed for every app user, then mint the auth token — OR the seed must
+  provision all demo accounts into CometChat. verify doesn't catch this because it logs in as the chat-test
+  pair (which IS provisioned) — the web proof uses the same two users. Genuine coverage + integration gap.
+<!-- note:mobile-cometchat-VALIDATED -->
+- **[VALIDATED] dat mobile CometChat chat + calls work at runtime (Android, SDK 52 / RN 0.76.9).** Logged
+  the debug app in as chat-a@dat.io (a provisioned CometChat user) → CometChat login succeeded
+  ("CometChatCalls initialization completed successfully"), the Conversations list loaded the real Chat-B
+  thread from the cloud (full history incl. the web-verify nonces + inline voice/video CALL-event bubbles),
+  and a FRESH message REST-sent as chat-b (live-rx-<ts>) arrived LIVE in the open thread. So SDK init +
+  login + conversation list + message history sync + REAL-TIME receive + the composer + call buttons all
+  work on device. Only prerequisite: the user must be a provisioned CometChat user (see the demo-users gap
+  above — Member/Admin/Guest 404 and spin; chat-a/chat-b work). iOS builds+launches (login screen) but the
+  harness can't tap iOS to drive the same flow; the shared RN bundle behaves identically.

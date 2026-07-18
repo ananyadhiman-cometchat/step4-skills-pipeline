@@ -154,8 +154,26 @@ def boot_android(avd="Pixel_10") -> bool:
     return False
 
 
+def _ensure_mobile_cometchat_creds(mobile_dir: Path):
+    """Bake the provisioned CometChat creds into the RN build-time env (EXPO_PUBLIC_COMETCHAT_*) before a
+    build — the app reads process.env.EXPO_PUBLIC_COMETCHAT_APP_ID at bundle time, and an empty/missing
+    mobile/.env makes CometChat init hang (Conversations spin forever). Seeds .env from .env.example / fills
+    from <slug>/.env.cometchat. No-op if already populated or the provisioned env isn't found."""
+    try:
+        from lib import selfheal
+        env_cc = mobile_dir.parent / ".env.cometchat"
+        if not env_cc.exists():
+            return
+        fixes = selfheal.ensure_web_cometchat_creds(mobile_dir, str(env_cc), slug=mobile_dir.parent.name)
+        if fixes:
+            print(f"  self-heal (mobile cometchat creds): {[f['rule'] for f in fixes]}")
+    except Exception as e:
+        print(f"  self-heal (mobile cometchat creds) skipped: {e}")
+
+
 def build_android(mobile_dir: Path, api_url: str) -> dict:
     andro = mobile_dir / "android"
+    _ensure_mobile_cometchat_creds(mobile_dir)
     (andro / "local.properties").write_text(f"sdk.dir={SDK}\n")
     # RN/Expo prebuild references @color/splashscreen_background but often omits it from colors.xml →
     # assembleRelease resource-linking fails. Proactively define it (idempotent, records the codegen gap).
@@ -270,6 +288,7 @@ def boot_ios(device=None) -> bool:
 
 def build_ios(mobile_dir: Path, api_url: str) -> dict:
     ios = mobile_dir / "ios"
+    _ensure_mobile_cometchat_creds(mobile_dir)
     # Derive the scheme from the .xcworkspace if present, else the ALWAYS-present .xcodeproj — NEVER a
     # hardcoded "Marketplace". `pod install` (below) creates <scheme>.xcworkspace, but on a freshly
     # `expo prebuild`-ed project no workspace exists YET at this point, so globbing only for *.xcworkspace
