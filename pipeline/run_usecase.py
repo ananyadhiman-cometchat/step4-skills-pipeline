@@ -569,6 +569,27 @@ def stage_demo(S, uc):
     # connected NO call leg is a real signal. Recorded always; hard-gates only when verify.mobile_gate
     # is set (mobile↔web call automation is acknowledged flaky, so it is advisory by default).
     mobile_built = [k for k in ("android", "ios") if shots.get(k, {}).get("ok")]
+    # DEMO COVERAGE (do NOT silently ship a web-only demo): a mobile platform that was ATTEMPTED but FAILED
+    # its build/launch is a real coverage gap — the demo must run on EVERY available stack, not skip the
+    # ones that broke. (Only a genuinely-absent iOS toolchain is a legit skip.) Surface loudly + record;
+    # hard-gate when verify.demo_coverage_gate is set. This is the "iOS missing but web+android could still
+    # have been done" gap — before, a failed android/ios demo build just dropped out of the matrix unseen.
+    demo_failed_build = [p for p in ("android", "ios")
+                         if shots.get(p) is not None and not shots.get(p, {}).get("ok")]
+    if demo_failed_build:
+        tails = {p: str(shots[p].get("tail", ""))[-180:] for p in demo_failed_build}
+        print(f"  ⚠ DEMO COVERAGE INCOMPLETE — {demo_failed_build} did NOT build/launch for the demo "
+              f"(web={'ok' if shots.get('web', {}).get('ok') else 'FAIL'}, "
+              f"built-mobile={mobile_built or 'none'}). A proper demo runs on every available stack. "
+              f"buildTails={tails}")
+        obs.event(S, uc["slug"], "demo", "coverage_gap", failedBuild=demo_failed_build, built=mobile_built)
+        # Android should ALWAYS build (no device-toolchain excuse) → hard-gate its demo-build failure so a
+        # fixable platform is never silently dropped. iOS can be a legit skip (absent Xcode/sim) → loud flag
+        # only. Toggle the whole thing with verify.demo_coverage_gate.
+        if S.get("verify", {}).get("demo_coverage_gate", True) and "android" in demo_failed_build:
+            die_gate(f"demo:{uc['slug']} coverage incomplete — Android failed to build for the demo "
+                     f"({str(shots.get('android', {}).get('tail',''))[-160:]}); a proper demo MUST run on "
+                     f"every buildable stack (web+android here). Fix/self-heal the android build. tag=agent")
     connected_plats = {k.split("-")[0] for k, v in mobile_calls.items() if v}
     mobile_refuted = [p for p in mobile_built if p not in connected_plats] if integrated else []
     res = {"useCase": uc["name"], "slug": uc["slug"], "screenshots": shots, "leftUp": True,
