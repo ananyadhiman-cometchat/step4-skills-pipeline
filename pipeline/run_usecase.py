@@ -595,6 +595,19 @@ def stage_demo(S, uc):
     res = {"useCase": uc["name"], "slug": uc["slug"], "screenshots": shots, "leftUp": True,
            "integrated": integrated, "mobileCallMatrix": mobile_calls, "mobileRefuted": mobile_refuted,
            "demoReview": demo_review, "webUrl": V.get("web_url", "http://localhost:3000")}
+    # DEMO GALLERY — the DEFINED pre-CP1 deliverable: render every demo shot (web/android/ios launch +
+    # logged-in) and the call matrix into one self-contained, shareable HTML gallery, organised by
+    # platform with per-shot status pills (the format finalised on dat). Honest by construction: a
+    # platform that failed shows as an open issue rather than dropping out. The agent publishes it
+    # (Artifact) or the human opens it at the CP1 checkpoint.
+    try:
+        from lib import demo_gallery
+        gpath = demo_gallery.build(str(demo), shots, mobile_calls, uc, str(demo / "gallery.html"))
+        if gpath:
+            res["gallery"] = gpath
+            print(f"  ▶ demo gallery (show at CP1): {gpath}  — open in a browser or publish as an Artifact")
+    except Exception as e:
+        print(f"  ⚠ demo gallery build skipped: {str(e)[:140]}")
     state.write(S, uc["slug"], "demo", res)
     # Boot-2 gate: the integrated mobile apps MUST have compiled. buildExit is set per platform
     # by build_android/build_ios; a non-zero exit means CometChat integration broke the build.
