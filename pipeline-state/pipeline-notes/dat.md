@@ -140,3 +140,18 @@
   work on device. Only prerequisite: the user must be a provisioned CometChat user (see the demo-users gap
   above — Member/Admin/Guest 404 and spin; chat-a/chat-b work). iOS builds+launches (login screen) but the
   harness can't tap iOS to drive the same flow; the shared RN bundle behaves identically.
+<!-- note:FALSE-POSITIVE-chat-and-calls -->
+- **[HARNESS false-positive — the important one] verify reported chat GREEN while EVERY real user's chat was
+  broken.** Root app bug: backend `login` minted a CometChat token via cc_auth_token but never cc_create_user
+  first (only signup did) → seeded/demo accounts (member1, admin, …) 404 in CometChat → empty token →
+  CometChatUIKit.login fails → chat page never loads (web + iOS + android). Why verify missed it:
+  `seed_and_resolve_pair` PROVISIONS the chat-test pair in CometChat OUT-OF-BAND (create_user), doing what
+  the app's login should do — so the proof passed on a rigged pair while real users were broken; and
+  `app_login` discarded the cometchat_auth_token so verify never checked it. FIXES: (1) backend
+  `_auth_response` now cc_create_user before minting (app fix, verified: member1 web chat opens); (2)
+  app_login now captures cometchat_auth_token and verify GATES on it being non-empty for the demo pair
+  (tag=skills) — would have caught this; (3) integrate.md.tmpl now mandates login-provisions-user. Calls were
+  ALSO broken (CometChatCalls.init never called → header buttons inert) + a login red-box crash
+  (Alert.alert given FastAPI's array `detail`) — both fixed. NOTE: live CALL connection is still NOT verified
+  end-to-end (WebRTC + two devices can't be automated headless) — the setup gaps are fixed but a real call
+  connecting remains unproven; do not report calling as working without a manual two-device test.

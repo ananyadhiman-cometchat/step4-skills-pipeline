@@ -167,9 +167,15 @@ def app_login(backend_url: str, email: str, password: str) -> dict:
         with urllib.request.urlopen(req, timeout=15) as r:
             d = json.loads(r.read() or b"{}")
         u = d.get("user", {}) or {}
-        return {"email": email, "uid": u.get("uid"), "name": u.get("name"), "role": u.get("role")}
+        # Capture cometchat_auth_token too: an EMPTY token here means the app's OWN login flow does not
+        # provision/mint a CometChat identity for this account (e.g. login mints a token but never creates
+        # the CometChat user), so REAL users can't chat — even though the harness later provisions the
+        # chat-test pair out-of-band (which masks it). verify gates on this. Runs BEFORE any out-of-band
+        # create_user, so it reflects the app's genuine behavior.
+        return {"email": email, "uid": u.get("uid"), "name": u.get("name"), "role": u.get("role"),
+                "cometchatAuthToken": d.get("cometchat_auth_token") or ""}
     except Exception as e:
-        return {"email": email, "uid": None, "error": str(e)[:140]}
+        return {"email": email, "uid": None, "error": str(e)[:140], "cometchatAuthToken": ""}
 
 
 def seed_and_resolve_pair(env_file: str, uc: dict, backend_url: str, password: str) -> dict:

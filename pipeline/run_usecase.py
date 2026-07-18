@@ -841,6 +841,24 @@ def stage_verify(S, uc):
             verify.compose_down(repo)
         die_gate(f"verify:{uc['slug']} could not resolve/seed the chat-test pair ({pair.get('mode')}) — "
                  f"check chatPair emails exist in the app seed: {pair.get('loginError') or 'seed send failed'} tag=setup")
+    # ANTI-FALSE-POSITIVE GATE: the chat-test pair are REAL app demo accounts. If the app's OWN login flow
+    # doesn't mint a CometChat auth token for them (login provisions no CometChat user, only signup does),
+    # then EVERY real user's chat is broken — even though the harness provisions the pair out-of-band, which
+    # is exactly what masked this. The app_login token is captured BEFORE that out-of-band provisioning, so
+    # an empty token here means real users can't chat. Gate on it (only when CometChat is actually wired —
+    # a non-integrated baseline legitimately has no token).
+    _logins = pair.get("logins") or {}
+    _tokless = [pair["web"][0] if not (_logins.get("a") or {}).get("cometchatAuthToken") else None,
+                pair["mobile"][0] if not (_logins.get("b") or {}).get("cometchatAuthToken") else None]
+    _tokless = [e for e in _tokless if e]
+    if pair.get("mode") == "app-demo-accounts" and os.environ.get("COMETCHAT_APP_ID") and _tokless:
+        if dockerUp:
+            verify.compose_down(repo)
+        fail_gate(S, uc, "verify",
+                  f"verify:{uc['slug']} app login mints NO CometChat auth token for real demo account(s) "
+                  f"{_tokless} — login provisions no CometChat user (only signup does?), so every real user's "
+                  f"chat is broken. The out-of-band pair-provisioning masked this. tag=skills",
+                  {"dockerUp": dockerUp, "exit": 2}, gate="verify")
     seed = {"ok": True}
     a_email, b_email = pair["web"][0], pair["mobile"][0]   # A = receiver, B = sender
     recv_uid, send_uid = pair["web"][1], pair["mobile"][1]
