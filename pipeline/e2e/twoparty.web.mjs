@@ -88,11 +88,15 @@ try {
     await callee.screenshot({ path: `${SHOT_DIR}/callee-no-ring-${TAG}.png` }).catch(() => {})
     await caller.screenshot({ path: `${SHOT_DIR}/caller-calling-${TAG}.png` }).catch(() => {})
   }
-  // SIGNALING verdict: ring reached the callee + accept succeeded. This is media-independent and
-  // deterministic; the Python runner additionally confirms CometChat logged the call as answered
-  // (server-side) and applies retry-until-pass. The DOM ongoing flags are kept only as evidence.
+  // CONNECT verdict (strengthened): ring reached the callee AND accept succeeded AND BOTH ends reached the
+  // ongoing-call surface — i.e. the call actually CONNECTED, not just signaled. Chromium negotiates real
+  // WebRTC with --use-fake-device-for-media-stream, so the ongoing UI genuinely renders (proven on dat:
+  // callerOngoing+calleeOngoing both true). The old signaling-only verdict (calleeRingVisible &&
+  // calleeAccepted) passed even when the call never connected — that was the "calls unverified" gap. The
+  // Python runner adds server-answered confirmation + retry-until-pass to absorb connect-timing flakiness.
   R.signalOk = R.calleeRingVisible && R.calleeAccepted
-  R.callWorks = R.signalOk
+  R.connectOk = R.callerOngoing && R.calleeOngoing
+  R.callWorks = R.signalOk && R.connectOk
 } catch (e) {
   R.error = String(e).slice(0, 200)
 }

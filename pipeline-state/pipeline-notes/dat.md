@@ -155,3 +155,16 @@
   (Alert.alert given FastAPI's array `detail`) — both fixed. NOTE: live CALL connection is still NOT verified
   end-to-end (WebRTC + two devices can't be automated headless) — the setup gaps are fixed but a real call
   connecting remains unproven; do not report calling as working without a manual two-device test.
+<!-- note:calls-actually-verified + regression-answer -->
+- **[HARNESS] "calls unverified" + "false positive recurred" — root causes + fixes.** (1) The rigged-pair
+  masking was NEVER fully removed: commit 28c05f0 added a `chatPair` opt-in but only `com` (1/10 UCs) set it;
+  dat + 7 others fell back to the legacy `fixed-chat-ab` path that skipped app_login (and the token check).
+  FIX: seed_and_resolve_pair now ALWAYS resolves via the app's real login (defaults to chat-a/chat-b@slug.io)
+  and captures cometchat_auth_token; verify gates on it being non-empty for EVERY UC (universal now). (2)
+  Calls were "verified" by a SIGNALING-only verdict (`callWorks = calleeRingVisible && calleeAccepted`) that
+  passed even when the call never connected — AND the accounts weren't provisioned so it never even started.
+  With the provisioning fix, running twoparty.web.mjs (which already uses `--use-fake-device-for-media-stream`)
+  shows the call CONNECTS: callerOngoing=true, calleeOngoing=true, real ongoing-call UI on both ends
+  (screenshots callee/caller-ongoing-voice.png). FIX: callWorks now REQUIRES connectOk (both ends ongoing) +
+  server-answered — deterministic connect teeth. The "headless can't do WebRTC / can't render the call"
+  claim was FALSE (fake-media Chromium does it); the real blocker was always the un-provisioned users.

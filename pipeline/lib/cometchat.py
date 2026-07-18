@@ -185,24 +185,28 @@ def seed_and_resolve_pair(env_file: str, uc: dict, backend_url: str, password: s
     dependency, no drift). Returns {web:(email,uid,name), mobile:(email,uid,name), ok, mode}.
     Falls back to the legacy fixed chat-a/chat-b pair only when no chatPair is configured."""
     cfg = _cfg(env_file)
+    slug = uc["slug"]
+    # ALWAYS resolve the pair through the app's OWN /api/auth/login so we capture each account's
+    # cometchat_auth_token — verify GATES on it being non-empty (an empty token means the app doesn't
+    # provision a CometChat identity on login, so REAL users can't chat, even though create_user below
+    # provisions the pair out-of-band). Default to the seeded chat-a/chat-b accounts when no chatPair is set.
+    # The OLD "legacy fixed-chat-ab" branch that skipped app_login (and thus the token check) is REMOVED —
+    # it silently let this exact false-positive through for the 8/10 use cases that have no chatPair.
     pair = uc.get("chatPair")
-    if pair and len(pair) >= 2:
-        a = app_login(backend_url, pair[0], password)   # web / receiver
-        b = app_login(backend_url, pair[1], password)   # mobile / sender
-        if a.get("uid") and b.get("uid"):
-            # ensure both exist in CometChat (idempotent) + seed a message so a conversation exists
-            create_user(cfg, a["uid"], a.get("name") or a["email"], [f"uc:{uc['slug']}", "role:calltest"])
-            create_user(cfg, b["uid"], b.get("name") or b["email"], [f"uc:{uc['slug']}", "role:calltest"])
-            sm = send_message(cfg, b["uid"], a["uid"], "Hi! (automated call-test seed)")
-            return {"web": (a["email"], a["uid"], a.get("name")),
-                    "mobile": (b["email"], b["uid"], b.get("name")),
-                    "ok": sm in (200, 201), "mode": "app-demo-accounts", "logins": {"a": a, "b": b}}
-        return {"web": (pair[0], a.get("uid"), None), "mobile": (pair[1], b.get("uid"), None),
-                "ok": False, "mode": "app-demo-accounts", "loginError": {"a": a, "b": b}}
-    # legacy: no chatPair configured → fixed chat-a/chat-b (requires the app to have seeded them)
-    r = seed_conversation(env_file, uc["slug"])
-    acc = call_test_accounts(uc["slug"])
-    return {"web": acc["web"], "mobile": acc["mobile"], "ok": r.get("ok"), "mode": "fixed-chat-ab"}
+    if not (pair and len(pair) >= 2):
+        pair = [f"chat-b@{slug}.io", f"chat-a@{slug}.io"]   # web/receiver, mobile/sender (seeded per spec)
+    a = app_login(backend_url, pair[0], password)   # web / receiver
+    b = app_login(backend_url, pair[1], password)   # mobile / sender
+    if a.get("uid") and b.get("uid"):
+        # ensure both exist in CometChat (idempotent) + seed a message so a conversation exists
+        create_user(cfg, a["uid"], a.get("name") or a["email"], [f"uc:{slug}", "role:calltest"])
+        create_user(cfg, b["uid"], b.get("name") or b["email"], [f"uc:{slug}", "role:calltest"])
+        sm = send_message(cfg, b["uid"], a["uid"], "Hi! (automated call-test seed)")
+        return {"web": (a["email"], a["uid"], a.get("name")),
+                "mobile": (b["email"], b["uid"], b.get("name")),
+                "ok": sm in (200, 201), "mode": "app-demo-accounts", "logins": {"a": a, "b": b}}
+    return {"web": (pair[0], a.get("uid"), None), "mobile": (pair[1], b.get("uid"), None),
+            "ok": False, "mode": "app-demo-accounts", "loginError": {"a": a, "b": b}}
 
 
 def seed_conversation(env_file, slug) -> dict:

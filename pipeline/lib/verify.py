@@ -364,9 +364,14 @@ def run_twoparty_web(repo_dir: Path, web_url: str, shot_dir: str,
                 # server-side confirmation (media-independent), anchored to this attempt's accept
                 ans = cometchat.call_answered(env_file, slug, v.get("acceptedAt") or since) if env_file else {"answered": None}
                 v["serverAnswered"] = ans.get("answered")
-                v["callWorks"] = bool(v.get("signalOk") and (ans.get("answered") is not False))
+                # Require the actual CONNECT (both ends on the ongoing-call surface), not just signaling —
+                # Chromium does real WebRTC with fake media, so a call that rings+accepts but never reaches
+                # the ongoing UI did NOT connect. connectOk comes from the browser script; server-answered
+                # is an extra media-independent confirmation. Retry-until-pass absorbs connect timing.
+                v["callWorks"] = bool(v.get("signalOk") and v.get("connectOk") and (ans.get("answered") is not False))
                 v["attempt"] = a + 1
-                attempts.append({"signalOk": v.get("signalOk"), "serverAnswered": ans.get("answered"), "pass": v["callWorks"]})
+                attempts.append({"signalOk": v.get("signalOk"), "connectOk": v.get("connectOk"),
+                                 "serverAnswered": ans.get("answered"), "pass": v["callWorks"]})
                 leg = v
                 if v["callWorks"]:
                     break
