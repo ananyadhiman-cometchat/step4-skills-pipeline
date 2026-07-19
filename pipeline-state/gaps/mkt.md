@@ -23,13 +23,13 @@ was incomplete or missing:
    modules. *Skill ask:* add it via an `expo-build-properties` / config plugin so it survives
    `expo prebuild` (which regenerates the Podfile). We had to hand-add targeted modular headers.
 
-3. **Web message-list does not scroll (recurring).** The CometChat UI Kit message list needs a
+3. **`missedTrigger:`** **Web message-list does not scroll (recurring).** The CometChat UI Kit message list needs a
    bounded-height / `overflow` container; the skill's mount layout doesn't provide one, so the list
    grows unbounded and never scrolls. *Skill ask:* the mount recipe should ship the bounded-height
    wrapper (we used `.cc-msg-list { flex:1 1 0; min-height:0; height:100%; overflow:hidden }` plus a
    child rule for the kit's auto-injected `.cometchat` element).
 
-4. **F-web-call — prebuilt call components have no positioning for Standard mode.**
+4. **`SDK-gap:`** **F-web-call — prebuilt call components have no positioning for Standard mode.**
    `cometchat-react-calls` mounts `<CometChatIncomingCall />` / `<CometChatOutgoingCall />` at root
    but gives fixed/inset overlay guidance ONLY for the SDK-only `joinSession` path. Dropped bare into
    the DOM in Standard mode, the ring renders as a **bottom-left banner** (user report: "call toast
@@ -39,7 +39,7 @@ was incomplete or missing:
    z-index:9999; display:flex; center; pointer-events:none }` with `> * { pointer-events:auto }` and
    `:empty { display:none }`. VERIFIED via two-party web↔web voice+video e2e (both ends connect).
 
-5. **F-mobile-creds — placeholder appId fails silently instead of erroring.** With
+5. **`missedTrigger:`** **F-mobile-creds — placeholder appId fails silently instead of erroring.** With
    `EXPO_PUBLIC_COMETCHAT_APP_ID=your_app_id_here` (the `.env.example` placeholder), the RN SDK dials
    `https://your_app_id_here.apiclient-us.cometchat.io` — a dead host — and the real-time socket
    never connects: chat presence works (REST login) but the conversation list spins forever and
@@ -49,7 +49,7 @@ was incomplete or missing:
    placeholder). (The pipeline-side half of this — the harness not injecting creds — is in
    pipeline-notes.)
 
-6. **F-web-ongoing — ongoing-call screen doesn't fill the viewport (Standard mode).** Same family
+6. **`SDK-gap:`** **F-web-ongoing — ongoing-call screen doesn't fill the viewport (Standard mode).** Same family
    as #4 but for the *connected* call: after Accept, `<CometChatOngoingCall>` renders in a bounded
    box (~top ⅔ of the page) instead of full-screen, so the **conversation thread bleeds through
    below the call controls** (Missed Call / Outgoing Call / Call Answered chips visible under the
@@ -69,7 +69,7 @@ was incomplete or missing:
    idle overlay isn't reliably `:empty`, so it covers the app and blocks clicks.)
 
 ## SDK packaging (CometChat product, not docs)
-- **RN UI Kit ships uncompiled `.tsx` with type errors.** `@cometchat/chat-uikit-react-native`
+- **`SDK-gap:`** **RN UI Kit ships uncompiled `.tsx` with type errors.** `@cometchat/chat-uikit-react-native`
   (CometChatCallButtons / CallLogs / Incoming / OutgoingCall) has TS2769/TS2322 in its *own* source,
   so a strict `tsc --noEmit` gate fails on the LIBRARY even though the app's integration is clean and
   it bundles/runs. *Ask:* ship compiled `.d.ts`. (Harness now ignores node_modules-only type errors.)

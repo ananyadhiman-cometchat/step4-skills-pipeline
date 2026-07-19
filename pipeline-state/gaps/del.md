@@ -34,7 +34,7 @@
   lib) and `no such module 'CometChatCardsSwift'` (UIKit's cards module). Net: the iOS SDK is
   **un-compilable on this machine** regardless of app code — a hard packaging/toolchain-pinning gap that
   blocks every iOS use case here until Xcode is updated to a Swift-6.2.3 toolchain (Xcode 16.5+/26).
-- SDK-gap (packaging, SHARPER — confirmed on Xcode 26.3): the binaries are pinned to the EXACT Swift build
+- SDK-gap: (packaging, SHARPER — confirmed on Xcode 26.3): the binaries are pinned to the EXACT Swift build
   that compiled them, not "any Swift ≥ 6.2.3". `CometChatSDK`/`CometChatUIKitSwift` xcframeworks ship ONLY
   `CometChat{SDK,UIKitSwift}.swiftmodule` in their `Modules/` dir — the sub-modules their `.private.swiftinterface`
   imports (`CometChatStarscream` in SDK, `CometChatCardsSwift` in UIKit) are statically MERGED in and NOT
@@ -46,7 +46,7 @@
   "Xcode 26.2, exactly", which is neither documented nor discoverable, and any future Xcode point release
   silently breaks the SDK until CometChat reships. A binary SDK should ship consumable sub-module interfaces
   (or vend the sub-frameworks) so the library-evolution path works across compiler patches.
-- SDK-gap (CONCLUSIVE — the frameworks are un-consumable as distributed, proven by exhaustive elimination):
+- SDK-gap: (CONCLUSIVE — the frameworks are un-consumable as distributed, proven by exhaustive elimination):
   On the EXACT compiler Xcode 26.2 / Swift 6.2.3 (swiftlang-6.2.3.3.21, matching the framework build), del's
   iOS STILL fails. The UIKit/SDK xcframework simulator slice ships ONLY `.swiftinterface` +
   `.private.swiftinterface` (+ .swiftdoc/.abi.json) in its `Modules/CometChat*.swiftmodule/` dir — there is
@@ -102,7 +102,7 @@
 
 ## Delivery (del) — ios (CometChat calls runtime)
 
-- SDK-gap (CRASH): after adding `CometChatCallsSDK` (4.2.3, the latest compatible with CometChatSDK 4.1.6 /
+- SDK-gap: (CRASH): after adding `CometChatCallsSDK` (4.2.3, the latest compatible with CometChatSDK 4.1.6 /
   CometChatUIKitSwift 5.1.16), placing/ringing a call WORKS, but **accepting a call CRASHES the app** — white
   screen then `EXC_BAD_ACCESS` (SIGSEGV, "possible pointer authentication failure"). The crashing stack is
   inside **CometChatCallsSDK → facebook::react::invokeInner / RCTNativeModule::invoke** — i.e. the calls SDK
@@ -114,12 +114,12 @@
   (RN-based SDKs commonly crash on the arm64 sim but work on device), (b) build the sim slice for x86_64 under
   Rosetta (EXCLUDED_ARCHS=arm64 for the simulator), (c) a CometChatCallsSDK build compiled for iOS 26 / the RN
   new architecture. The "Framework not installed" error (fixed by adding the pod) was a SEPARATE, earlier gap.
-- UX-bug: the `CometChatIncomingCall` overlay (mounted full-screen at the tab-bar root) shows an incoming-call
+- SDK-gap: the `CometChatIncomingCall` overlay (mounted full-screen at the tab-bar root) shows an incoming-call
   toast that **intercepts touches across the whole screen**, so a lingering/stuck call makes the entire app
   inaccessible. Compounded by dozens of stuck server-side call sessions (from automated call testing) that
   re-deliver on every login. The overlay should be a hit-test passthrough (only the toast intercepts) and/or
   the app should auto-reject stale incoming calls; there is no clean REST endpoint to end stuck sessions.
-- SDK-gap (CLARIFIED): the call CONNECTS fully — signaling + WebRTC media work end-to-end (verified: the
+- SDK-gap: (CLARIFIED): the call CONNECTS fully — signaling + WebRTC media work end-to-end (verified: the
   Android peer showed a live connected call at 00:47 with working controls after iOS auto-accepted). The ONLY
   failure is the **iOS in-call SCREEN crashing on render** (CometChatCallsSDK 4.2.3 React-Native UI). It
   crashes on BOTH the arm64 iOS-26 simulator AND the x86_64/Rosetta simulator — so it is a hard
