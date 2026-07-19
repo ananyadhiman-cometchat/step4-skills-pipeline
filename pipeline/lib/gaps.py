@@ -14,6 +14,13 @@ MARKERS = {
     "skills": ["missedTrigger:", "falseTrigger:", "variant:", "hallucination:"],
     "sdk": ["SDK-gap:"],
 }
+# Every canonical marker string the tally can see. A gap entry MUST carry one of these or it is invisible
+# to rebuild()'s count (the exact bug that made del/mkt under-report until normalized).
+CANON = tuple(m for grp in MARKERS.values() for m in grp)
+# Phrases that make an entry legitimately markerless (retracted / corrected / not-a-gap / empty section) —
+# these are NOT violations. Kept small and explicit.
+NON_GAP = ("retracted", "not a cometchat gap", "not a real cometchat gap", "skill was correct",
+           "codegen missed it", "audit trail", "[corrected]", "no coverage gap", "no docs")
 
 
 def _count(gaps_dir: Path, marker: str) -> int:
@@ -51,5 +58,61 @@ def rebuild(settings: dict) -> dict:
     else:
         lines += ["", "_No section files yet — populated once integrate stages run._"]
     lines += ["", "---", "_Rollup feeds aggregate.py → rankedFixBacklog._"]
-    out.write_text("\n".join(lines))
-    return {"masterGaps": str(out), "counts": counts}
+    lint_res = lint(gaps_dir)
+    if not lint_res["clean"]:
+        note = (f"\n> ⚠️ **lint: {len(lint_res['violations'])} gap entr"
+                f"{'y' if len(lint_res['violations'])==1 else 'ies'} carry NO canonical marker** — "
+                f"invisible to the tally. Add one of {', '.join(CANON)}. "
+                + "; ".join(f"{v['file']}:{v['line']}" for v in lint_res["violations"][:12]))
+        out.write_text("\n".join(lines) + "\n" + note + "\n")
+        print("gaps.rebuild: " + note.strip())
+    else:
+        out.write_text("\n".join(lines))
+    return {"masterGaps": str(out), "counts": counts, "lint": lint_res}
+
+
+def lint(gaps_dir) -> dict:
+    """Flag ledger entries that read like a gap finding but carry NO canonical marker, so the tally can't
+    see them (the del/mkt under-report bug). Deterministic. An "entry" is a `### ` header, or — when NOT
+    inside a `### ` block — a top-level `- ` bullet or `N. ` numbered item; its whole block is checked.
+    Retracted/corrected/none entries are exempt. Returns {clean, violations:[{file,line,text}]}."""
+    gaps_dir = Path(os.path.expanduser(gaps_dir))
+    viols = []
+    for f in sorted(gaps_dir.glob("*.md")):
+        entries, cur, in_h3 = [], None, False
+        for i, ln in enumerate(f.read_text().splitlines()):
+            if re.match(r"^#{1,2} ", ln):                       # '# ' / '## ' section header — not a gap
+                if cur: entries.append(cur)
+                cur, in_h3 = None, False
+            elif re.match(r"^### ", ln):                        # h3 gap entry (owns its prose + sub-bullets)
+                if cur: entries.append(cur)
+                cur, in_h3 = (i + 1, [ln]), True
+            elif not in_h3 and re.match(r"^(- |\d+\. )", ln):   # top-level bullet / numbered gap entry
+                if cur: entries.append(cur)
+                cur = (i + 1, [ln])
+            elif cur:
+                cur[1].append(ln)                               # continuation of the current entry
+        if cur: entries.append(cur)
+        for start, blk in entries:
+            txt = "\n".join(blk); low = txt.lower()
+            head = re.sub(r"^[-\d.\s*`>]+", "", blk[0]).lower()
+            if any(m in txt for m in CANON):        continue    # has a marker → fine
+            if head.startswith("none"):             continue    # empty-section placeholder
+            if any(x in low for x in NON_GAP):      continue    # deliberately not a gap
+            viols.append({"file": f.name, "line": start, "text": blk[0].strip()[:90]})
+    return {"clean": not viols, "violations": viols}
+
+
+if __name__ == "__main__":   # pre-commit / CI gate: `python -m lib.gaps <gaps_dir>` → exit 1 on violations
+    import sys
+    d = sys.argv[1] if len(sys.argv) > 1 else "pipeline-state/gaps"
+    r = lint(d)
+    if r["clean"]:
+        print(f"gaps lint: clean ✓ ({d})")
+    else:
+        print(f"gaps lint: {len(r['violations'])} unmarked gap entr"
+              f"{'y' if len(r['violations'])==1 else 'ies'} — add a canonical marker "
+              f"({', '.join(CANON)}):")
+        for v in r["violations"]:
+            print(f"  {v['file']}:{v['line']}  {v['text']}")
+    sys.exit(0 if r["clean"] else 1)
