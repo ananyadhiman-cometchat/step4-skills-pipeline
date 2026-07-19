@@ -168,3 +168,50 @@
   (screenshots callee/caller-ongoing-voice.png). FIX: callWorks now REQUIRES connectOk (both ends ongoing) +
   server-answered — deterministic connect teeth. The "headless can't do WebRTC / can't render the call"
   claim was FALSE (fake-media Chromium does it); the real blocker was always the un-provisioned users.
+<!-- note:match-peer-not-provisioned -->
+- **[integration] Chatting with a MATCH errors ("Oops") — the match's user isn't in CometChat.** Found via
+  real-device QA: on android, opening the chat with a match (Riley Park / dat-mem-002) shows CometChat's
+  "Oops! Looks like something went wrong" message-list error. dat-mem-002 → REST 404. Cause: my login-time
+  provisioning fix creates the CometChat user for whoever LOGS IN, but a match/peer you chat with must ALSO
+  exist in CometChat — and seeded profile owners who never logged in don't. So 1:1 chat only works between
+  two users who have each logged in at least once. FIX (follow-up): the backend seed must createUser in
+  CometChat for EVERY seeded user (idempotent), OR match-creation must provision both parties. Same
+  provisioning root as [[verify-rigged-pair-masks-broken-chat]] but on the PEER side. Note the Conversations
+  list itself loads fine (empty state) — only opening a thread with an unprovisioned peer errors.
+
+### [harness] Verify/demo must exercise the REAL match→chat entry point, not a pre-seeded pair
+dat's MatchDetailPage shipped a `Chat panel — powered by CometChat (coming soon)` STUB — the entry point every
+real user hits (open a match → chat) was a dead end — yet verify passed because it drove `/conversations` with an
+out-of-band pre-seeded pair that already had a thread. Harden verify to: seed an ACTIVE match between two seeded
+members, log in as one, navigate the match route, assert the CometChat thread mounts (composer visible), then
+send + cross-receive. Same "all-usecase vs unique-instance" false-positive family as verify-rigged-pair. App fix
+committed d90121d8 (embed real MessageHeader+List+Composer in MatchDetailPage).
+
+### [harness] RN mobile call verification — automation + build reality
+1) `adb shell input tap` CANNOT drive the CometChat RN MessageHeader touchables (gesture-handler); tapping the
+   header call button no-ops with zero JS logs → looks like "call button broken" but is an automation artifact.
+   Drive via Maestro (`tapOn: {point}`) OR prove calls from the RECEIVE side (web peer rings the device via
+   Playwright/fake-media → `adb` taps the incoming-call Accept, which IS a standard touchable → OngoingCall connects).
+2) The RN debug app keeps the Metro bundle it loaded at launch IN MEMORY; a committed JS fix (e.g. CometChatCalls.init)
+   is not live until force-stop+relaunch or an APK rebuild — the built demo APK can lag the committed source and read
+   as "still broken". Rebuild the APK (or reload) before judging mobile.
+3) `CometChatCallButtons.makeVoiceCall` silently returns (no log, no call) if RECORD_AUDIO/CAMERA isn't granted —
+   pre-grant on the emulator before the call check.
+
+### [deliverable] Green-light proof gallery standard
+Finalized a per-usecase "green light" screenshot gallery (Artifact) organized by platform (Web/Android/iOS) with
+per-shot status pills (Verified / Open issue) and a one-line "what it proves" caption — honest about partial
+platforms rather than all-green. Builder: runs/dat/_shots/build_gallery.py (sips-resize → base64-embed → Artifact).
+This is the format to reuse as the pipeline's green-light standard the user asked to finalize.
+
+### [codegen/app] RN screens generated WITHOUT safe-area insets → header buttons dead (call/video/logout)
+User manual-QA: "can't click the upper buttons (call, video, logout) in BOTH mobile apps." Root cause: generated RN
+screens had no safe-area handling — ChatScreen/ConversationsScreen used a bare top View, and the other 8 screens
+imported `SafeAreaView` from **'react-native'** (a no-op on Android). So the whole top strip (CometChat MessageHeader
+back+voice+video buttons; each screen's title + Log Out) rendered UNDER the status bar/notch = a dead touch zone.
+Visible tell: the app title overlapped the status-bar clock. NOT a gesture-handler/automation issue (I misdiagnosed it
+as one first — but the user's finger couldn't tap them either). Fix (commit 6cc01b37): chat screens pad by
+`useSafeAreaInsets().top`; other screens import SafeAreaView from **'react-native-safe-area-context'**. After the fix
+the Android header voice-call button initiates a call. Codegen guidance for RN: NEVER import SafeAreaView from
+'react-native' (iOS-only); use react-native-safe-area-context on every screen with a top bar, and give CometChat
+message-header screens an explicit top inset. Worth a spec-depth / RN-scaffold check so future RN use cases ship it.
