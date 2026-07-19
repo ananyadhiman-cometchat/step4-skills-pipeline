@@ -655,17 +655,27 @@ def stage_teardown(S, uc):
     """Cleanly close the demo — docker down -v, uninstall THIS use case's apps + any stale prior-UC
     apps, shut sims/emulator."""
     repo = state.repo_dir(S, uc["slug"])
+    free_before = mobile.disk_free_gb()
+    # docker: down -v + REMOVE this UC's built images + prune ALL build cache (compose_down does the -af/--rmi)
     td = verify.compose_down(repo) if (repo / "docker-compose.yml").exists() else {"dockerCleanupDone": True}
-    # resolve the actual app package(s) for this use case (not the mkt-hardcoded default)
-    pkg = None
+    # resolve the actual app package(s) + mobile dirs for this use case (not the mkt-hardcoded default)
+    pkg = None; mobile_dirs = []
     for c in prompts.expand_components(uc):
         if c["kind"] in ("mobile", "app", "android", "ios"):
             pkg = providers.resolve_app_id(c["kind"], repo / c["dir"]) or pkg
+            mobile_dirs.append(repo / c["dir"])
     stale = mobile.clean_stale_apps(keep_pkg=None)   # also sweep leftover prior-UC apps off the emulator
     md = mobile.teardown_mobile(ios_bundle=pkg, android_pkg=pkg)
-    res = {"dockerCleanupDone": td.get("dockerCleanupDone"), "mobileTornDown": md, "staleAppsRemoved": stale}
+    # AGGRESSIVE reclaim — the UC is done, so its node_modules/Pods/build dirs + global DerivedData are
+    # disposable. Without this every UC leaves multi-GB behind and the Nth run hits disk-full (UC1 lesson).
+    reclaimed = [mobile.reclaim_after_teardown(d) for d in (mobile_dirs or [None])]
+    free_after = mobile.disk_free_gb()
+    res = {"dockerCleanupDone": td.get("dockerCleanupDone"), "mobileTornDown": md, "staleAppsRemoved": stale,
+           "reclaimed": reclaimed, "diskFreeGbBefore": free_before, "diskFreeGbAfter": free_after,
+           "diskFreedGb": free_after - free_before}
     state.write(S, uc["slug"], "teardown", res)
-    print(f"OK teardown:{uc['slug']} — docker down, sims/emulator shut, apps uninstalled")
+    print(f"OK teardown:{uc['slug']} — docker (down+rmi+cache), sims/emulator shut, apps uninstalled, "
+          f"mobile artifacts reclaimed; disk free {free_before}→{free_after}GB")
     return res
 
 

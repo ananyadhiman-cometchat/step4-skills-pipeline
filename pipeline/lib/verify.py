@@ -178,8 +178,13 @@ def compose_up(repo_dir: Path) -> tuple[bool, str]:
 
 
 def compose_down(repo_dir: Path) -> dict:
-    code, out = _run(["docker", "compose", "down", "-v"], cwd=str(repo_dir), timeout=300)
-    _run(["docker", "builder", "prune", "-f"])
+    # `--rmi local` ALSO removes the images this compose built (<proj>-web, <proj>-backend, …) — without it
+    # every use case leaves ~0.5–1GB of images behind and the Nth UC hits disk-full inside the Docker VM.
+    # `builder prune -af` reclaims ALL build cache (not just dangling) — usually the biggest single reclaim
+    # (several GB). Base images (python/node/nginx) are kept, so the next UC doesn't re-pull them.
+    code, out = _run(["docker", "compose", "down", "-v", "--rmi", "local"], cwd=str(repo_dir), timeout=300)
+    _run(["docker", "builder", "prune", "-af"])
+    _run(["docker", "image", "prune", "-f"])
     return {"dockerCleanupDone": code == 0, "tail": _tail(out)}
 
 

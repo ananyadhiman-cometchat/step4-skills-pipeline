@@ -90,6 +90,32 @@ def cleanup_build_artifacts(mobile_dir: Path | None = None) -> None:
             subprocess.run(["rm", "-rf", str(d)], capture_output=True)
 
 
+def reclaim_after_teardown(mobile_dir: Path | None = None) -> dict:
+    """AGGRESSIVE disk reclaim for a COMPLETED use case (call ONLY from stage_teardown). Removes the
+    per-UC heavy, fully-regenerable build artifacts — node_modules (~2.5GB), iOS Pods (~0.8GB),
+    gradle/build dirs — plus the GLOBAL Xcode DerivedData (~0.6-6GB, per-build, shared across UCs).
+    This is what stops the Nth use case from hitting disk-full: teardown otherwise left every UC's
+    node_modules + Pods + DerivedData on disk. NOT safe mid-pipeline — it deletes deps a subsequent
+    build in the SAME UC needs; only the UC being torn down is disposable. All of it regenerates on
+    `npm install` / `pod install` / next build."""
+    freed = []
+    dd = Path.home() / "Library/Developer/Xcode/DerivedData"
+    if dd.is_dir():
+        for c in dd.iterdir():
+            subprocess.run(["rm", "-rf", str(c)], capture_output=True)
+        freed.append("DerivedData/*")
+    for p in Path("/tmp").glob("iosbuild*"):
+        subprocess.run(["rm", "-rf", str(p)], capture_output=True)
+    if mobile_dir:
+        for rel in ("node_modules", "ios/Pods", "ios/build", "android/build",
+                    "android/app/build", "android/.gradle", ".expo"):
+            d = mobile_dir / rel
+            if d.exists():
+                subprocess.run(["rm", "-rf", str(d)], capture_output=True)
+                freed.append(rel)
+    return {"reclaimed": freed, "mobileDir": str(mobile_dir) if mobile_dir else None}
+
+
 def disk_free_gb() -> int:
     r = subprocess.run(["df", "-g", "/"], capture_output=True, text=True)
     try:
