@@ -532,7 +532,11 @@ def run_twoparty_web(repo_dir: Path, web_url: str, shot_dir: str,
     if not web.exists() or not src.exists():
         return {"error": "no web/ or twoparty script", "ok": False}
     dst = web / "_twoparty_verify.mjs"
-    dst.write_text(src.read_text())
+    # The script is COPIED into the app's web/ so `@playwright/test` resolves there — which means its
+    # relative `./browser.mjs` import must be copied alongside it, under a `_`-prefixed name so the
+    # repo's `web/_*.mjs` ignore rule keeps it untracked.
+    (web / "_browser.mjs").write_text((src.parent / "browser.mjs").read_text())
+    dst.write_text(src.read_text().replace("from './browser.mjs'", "from './_browser.mjs'"))
     out = {}
     try:
         for ctype in ("voice", "video"):
@@ -572,6 +576,7 @@ def run_twoparty_web(repo_dir: Path, web_url: str, shot_dir: str,
             out[ctype] = leg
     finally:
         dst.unlink(missing_ok=True)
+        (web / "_browser.mjs").unlink(missing_ok=True)
     out["ok"] = bool(out.get("voice", {}).get("callWorks") and out.get("video", {}).get("callWorks"))
     return out
 

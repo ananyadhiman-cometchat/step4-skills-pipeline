@@ -2,7 +2,7 @@
 // other end (a mobile device driven by Maestro) has time to receive + accept. One browser context.
 // Env: WEB_URL, CALL_TYPE(voice|video), CALLER_EMAIL, E2E_PASSWORD, HOLD_MS, SHOT_DIR, TAG.
 // Prints a JSON verdict: {login, callStarted, callerOngoing}.
-import { chromium } from '@playwright/test'
+import { launchForCalls } from './browser.mjs'
 
 const WEB = process.env.WEB_URL || 'http://localhost:3000'
 const PW = process.env.E2E_PASSWORD || 'Mkt@seed2026!'
@@ -13,7 +13,7 @@ const SHOT_DIR = process.env.SHOT_DIR || '/tmp'
 const TAG = process.env.TAG || 'mobilecall'
 
 const R = { login: false, callStarted: false, callerOngoing: false, callType: CALL_TYPE }
-const b = await chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] })
+const b = await launchForCalls()
 try {
   const ctx = await b.newContext({ permissions: ['microphone', 'camera'] })
   const p = await ctx.newPage({ viewport: { width: 1280, height: 900 } })

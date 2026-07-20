@@ -3,7 +3,7 @@
 // .cc-call-overlay (not the old bottom-left banner), Sara accepts, and BOTH ends reach the
 // ongoing/connected call screen. Prints a JSON verdict. Env: WEB_URL, CALL_TYPE, CALLER_EMAIL,
 // CALLEE_EMAIL, E2E_PASSWORD, SHOT_DIR.
-import { chromium } from '@playwright/test'
+import { launchForCalls } from './browser.mjs'
 
 const WEB = process.env.WEB_URL || 'http://localhost:3000'
 const PW = process.env.E2E_PASSWORD || 'Mkt@seed2026!'
@@ -33,7 +33,7 @@ async function login(ctx, email) {
   return p
 }
 
-const b = await chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] })
+const b = await launchForCalls()
 try {
   // grant media at context level so getUserMedia doesn't block the WebRTC session
   const callerCtx = await b.newContext({ permissions: ['microphone', 'camera'] })

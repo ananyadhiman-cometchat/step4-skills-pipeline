@@ -1,7 +1,7 @@
 // chatcall.web.mjs — the canonical web chat/call verify (login → open chat → send → call).
 // Proves the CometChat integration at runtime. Reads config from env:
 //   E2E_EMAIL, E2E_PASSWORD, WEB_URL, SHOT (screenshot path). Prints a JSON verdict.
-import { chromium } from '@playwright/test'
+import { launchForCalls } from './browser.mjs'
 
 const EMAIL = process.env.E2E_EMAIL || 'bob.buyer@mkt.io'
 const PW = process.env.E2E_PASSWORD || 'Mkt@seed2026!'
@@ -9,7 +9,7 @@ const WEB = process.env.WEB_URL || 'http://localhost:3000'
 const SHOT = process.env.SHOT || ''
 
 const R = { login: false, sdkReady: false, seedMsgVisible: false, composerFound: false, msgSent: false, callUI: false }
-const b = await chromium.launch()
+const b = await launchForCalls()
 const p = await b.newPage({ viewport: { width: 1280, height: 900 } })
 const errs = []
 p.on('pageerror', e => errs.push(String(e).slice(0, 120)))

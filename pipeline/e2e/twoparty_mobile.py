@@ -90,7 +90,9 @@ def web_proc(script: str, env: dict, slug: str = "mkt"):
     "native calling is broken" when nothing was ever dialled."""
     web = (HERE.parent.parent / "runs" / slug / "web")
     dst = web / f"_{Path(script).stem}_run.mjs"
-    dst.write_text((HERE / script).read_text())
+    # copy the shared headed-browser launcher next to it (relative import must resolve here)
+    (web / "_browser.mjs").write_text((HERE / "browser.mjs").read_text())
+    dst.write_text((HERE / script).read_text().replace("from './browser.mjs'", "from './_browser.mjs'"))
     p = subprocess.Popen(["node", str(dst)], cwd=str(web), text=True,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          env={**os.environ, **env})
