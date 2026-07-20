@@ -651,8 +651,13 @@ def stage_demo(S, uc):
         # a spinner or an error state — which is exactly how fin's ticket detail failed on all three
         # clients while login→home stayed green.
         vs += [{"name": p, "path": shots[p]["path"], "rubric": "feed_loaded",
-                "context": f"{uc['name']} {p} — a DETAIL screen; must show the record's real fields, "
-                           f"not a blank view, spinner or error state"}
+                "context": (f"{uc['name']} {p} — a COLLECTION/LIST screen; must show multiple records "
+                            f"with real data, not a blank view, spinner or error state")
+                           if p.endswith("-list") else
+                           (f"{uc['name']} {p} — a SINGLE-RECORD DETAIL screen. It must show ONE record's "
+                            f"own fields (title/description/status/metadata for that one item). REFUSE it "
+                            f"if it is actually a LIST of several records, a blank view, a spinner or an "
+                            f"error state — a list here means the tap never opened the record.")}
                for p in ("android-list", "android-detail", "ios-list", "ios-detail")
                if shots.get(p, {}).get("path") and os.path.exists(shots[p]["path"])]
         if vs:

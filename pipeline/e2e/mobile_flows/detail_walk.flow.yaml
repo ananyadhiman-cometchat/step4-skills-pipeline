@@ -56,8 +56,11 @@ appId: ${APP_ID}
 - takeScreenshot: /tmp/mobile-list
 # --- open the FIRST row. `index: 0` keeps this use-case agnostic: no row title is hardcoded, so the
 #     same flow works on tickets, orders, listings, bookings, ... ---
+# Tap the FIRST row. `point` is a fraction of the SCREEN, and the first row sits high in the list
+# (below the title/filters, above the fold) — 42% landed BELOW the last row on a 3-item iOS list, so
+# the tap hit empty space, no navigation happened, and the "detail" screenshot was just the list again.
+# 28% is inside row 1 on both platforms. `index` is dropped: combining it with `point` is ambiguous.
 - tapOn:
-    index: 0
-    point: "50%,42%"
+    point: "50%,28%"
 - waitForAnimationToEnd: { timeout: 7000 }
 - takeScreenshot: /tmp/mobile-detail
