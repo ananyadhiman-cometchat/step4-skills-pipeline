@@ -701,14 +701,36 @@ def stage_demo(S, uc):
     # platform with per-shot status pills (the format finalised on dat). Honest by construction: a
     # platform that failed shows as an open issue rather than dropping out. The agent publishes it
     # (Artifact) or the human opens it at the CP1 checkpoint.
-    try:
-        from lib import demo_gallery
-        gpath = demo_gallery.build(str(demo), shots, mobile_calls, uc, str(demo / "gallery.html"))
-        if gpath:
-            res["gallery"] = gpath
-            print(f"  ▶ demo gallery (show at CP1): {gpath}  — open in a browser or publish as an Artifact")
-    except Exception as e:
-        print(f"  ⚠ demo gallery build skipped: {str(e)[:140]}")
+    # ── MANDATORY GALLERY COVERAGE ─────────────────────────────────────────────────────────────
+    # The demo stage is INCOMPLETE without a screenshot gallery covering EVERY platform this use
+    # case ships. This was previously a try/except that printed "gallery build skipped" and carried
+    # on, so a missing or partial gallery never blocked the stage and the checkpoint could be
+    # presented with no visual evidence for a platform. A demo whose whole purpose is "show the
+    # working apps" does not pass without the pictures.
+    from lib import demo_gallery
+    gpath = demo_gallery.build(str(demo), shots, mobile_calls, uc, str(demo / "gallery.html"))
+    if not gpath or not os.path.exists(gpath):
+        die_gate(f"demo:{uc['slug']} produced NO gallery — the demo deliverable is the visual proof "
+                 f"for every platform; without it the stage is incomplete. tag=harness")
+    res["gallery"] = gpath
+    # Every platform this use case ships must appear as a section in the gallery.
+    want = []
+    if "web" in kinds or is_flutter_web:
+        want.append("Web")
+    for _c in prompts.expand_components(uc):
+        if _c["kind"] in ("android", "mobile", "app"):
+            want.append("Android")
+        if _c["kind"] in ("ios", "mobile", "app"):
+            want.append("iOS")
+    want = sorted(set(want))
+    ghtml = Path(gpath).read_text(errors="ignore")
+    missing_sections = [p for p in want if f"<h2>{p}</h2>" not in ghtml]
+    if missing_sections:
+        die_gate(f"demo:{uc['slug']} gallery is INCOMPLETE — no section for {missing_sections} "
+                 f"(expected {want}). Every platform the use case ships must be shown with "
+                 f"screenshots before the demo counts as done. tag=harness")
+    n_figs = ghtml.count("<figure")
+    print(f"  ▶ demo gallery: {gpath} — {n_figs} shots across {want}")
     state.write(S, uc["slug"], "demo", res)
     # Boot-2 gate: the integrated mobile apps MUST have compiled. buildExit is set per platform
     # by build_android/build_ios; a non-zero exit means CometChat integration broke the build.
