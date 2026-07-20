@@ -14,7 +14,13 @@ Requirements:
   pre-existing DB user) exist ONLY in the app DB — never in CometChat — so minting a token for them 404s and
   returns "". An empty token makes `CometChatUIKit.login({{authToken:""}})` fail → the chat page NEVER LOADS
   for any real user (compile + a rigged chat-test pair still pass green — this is a classic false-positive).
-  FIX: call an idempotent CometChat `createUser` (409 = already-exists = ok) for the user in the SHARED
+  FIX: call an idempotent CometChat `createUser` for the user in the SHARED
+  login+signup response path. CAUTION — "already exists" is NOT 409: CometChat's POST /v3/users returns
+  **HTTP 400 with error.code `ERR_UID_ALREADY_EXISTS`** for a duplicate uid. Branch on that error CODE
+  (accept 200/201, plus 409 OR 400-with-ERR_UID_ALREADY_EXISTS). A 409-only check is NOT idempotent: the
+  first login for a uid succeeds and EVERY later login throws, so returning users silently get an empty
+  token and their chat dies. Log the response BODY on failure — a bare status cannot distinguish
+  already-exists from a credentials/payload error. Do this in the SHARED
   login+signup response path, BEFORE minting the token — not just on signup. So every login self-heals the
   account into CometChat. Verify by asserting a demo login's response has a NON-EMPTY cometchat_auth_token.
 - Namespace every UID/GUID with "{slug}-". Map RBAC roles → CometChat tags/groups.

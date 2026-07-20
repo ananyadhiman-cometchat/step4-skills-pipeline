@@ -350,6 +350,48 @@ def _fix_ios_companion_pods(ctx) -> tuple[bool, str]:
     return True, f"added CometChatStarscream(podspec)+CometChatCardsSwift to {patched} Podfile(s)"
 
 
+_MAVEN_BUILDER = "maven:3.9-eclipse-temurin-17"
+
+
+def _fix_java_dockerfile_multistage(ctx) -> tuple[bool, str]:
+    """Make a Java backend image build its own jar instead of COPYing a host-built one.
+
+    Codegen emits `FROM eclipse-temurin:17-jre-jammy` + `COPY target/<app>.jar app.jar`, which means
+    the image contains whatever jar happened to be on the host at build time. Nothing in the pipeline
+    re-runs `mvn package` after integrate, so `docker compose up --build` faithfully re-copies STALE
+    bytecode: on fin the running backend predated the CometChat integration entirely (zero CometChat
+    classes in the jar), so login returned an empty cometchat_auth_token and verify's
+    "login mints no CometChat token" gate fired — pointing at the login code, which was correct.
+    It also means the repo cannot be built from a fresh clone at all, since target/ is git-ignored.
+    Rewrite to a multi-stage build so the image always matches the source."""
+    repo = Path(ctx.get("repo_dir") or "")
+    out = []
+    for df in [repo / "backend" / "Dockerfile", repo / "Dockerfile"]:
+        if not df.exists():
+            continue
+        t = df.read_text()
+        if "AS builder" in t or "as builder" in t:
+            continue                                  # already multi-stage
+        m = re.search(r"^\s*COPY\s+(?:--chown=\S+\s+)?target/\S*\.jar\s+(\S+)\s*$", t, re.M)
+        if not m:
+            continue                                  # not the copy-a-prebuilt-jar shape
+        if not (df.parent / "pom.xml").exists():
+            continue                                  # only Maven projects
+        dest = m.group(1)
+        builder = (f"FROM {_MAVEN_BUILDER} AS builder\n"
+                   "WORKDIR /build\n"
+                   "COPY pom.xml .\n"
+                   "RUN mvn -B -q dependency:go-offline\n"
+                   "COPY src ./src\n"
+                   "RUN mvn -B -q package -DskipTests\n\n")
+        t = builder + t[:m.start()] + f"COPY --from=builder /build/target/*.jar {dest}\n" + t[m.end():]
+        df.write_text(t)
+        out.append(str(df.relative_to(repo)))
+    if not out:
+        return False, "no single-stage Java Dockerfile copying a prebuilt jar"
+    return True, f"multi-stage Maven build → {out} (image now compiles the CURRENT source)"
+
+
 def _fix_ios_calls_sdk_version(ctx) -> tuple[bool, str]:
     """The iOS Calls SDK on the 4.x line (what `~> 4.1` resolves to — 4.2.3) HARD-CRASHES the instant the
     in-call session UI mounts on an iOS 26 simulator: EXC_BAD_ACCESS (SIGSEGV, "possible pointer
@@ -719,6 +761,12 @@ def _fix_kotlin_optin(ctx) -> tuple[bool, str]:
 # ---------- rule registry ----------
 # phase: 'pre' = proactive before build · 'on_fail' = reactive on a matching failure
 RULES = [
+    {"id": "java-dockerfile-multistage", "phase": "pre", "families": {"web", "rn", "flutter",
+                                                                     "android-native", "ios-native", "other"},
+     "sig": r"COPY\s+target/\S*\.jar|cometchat_auth_token|no CometChat auth token",
+     "fix": _fix_java_dockerfile_multistage, "owner": "harness",
+     "note": "fin: the backend image COPYed a host-built jar, so it ran PRE-integration bytecode "
+             "(zero CometChat classes) and login returned an empty cometchat_auth_token"},
     {"id": "kotlin-optin", "phase": "on_fail", "families": {"android-native", "rn"},
      "sig": r"This API is experimental and is likely to change|requires opt-in|Opt-in requirement"
             r"|Experimental(ComposeUi|Material3|Foundation|Animation)Api", "fix": _fix_kotlin_optin,

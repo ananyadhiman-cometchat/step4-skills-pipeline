@@ -68,3 +68,28 @@
   - _workarounds applied (harness)_: build the simulator arm64-only (`EXCLUDED_ARCHS=x86_64`) and give
     the iOS gate a FRESH per-run `-derivedDataPath`. NB adding `import CometChatCardsSwift` to the
     consuming Swift files does NOT help — verified by building with and without it.
+<!-- selfheal:compose-env -->
+- **`missedTrigger:`** [self-heal:compose-env] The production/deployment skill must document injecting COMETCHAT_* into the RUNTIME deployment env (docker-compose/service), not just .env.example — otherwise the backend mints an EMPTY auth token and the conversation list errors ('Oops') on every client.
+  - _auto-repaired by the harness (fix's existence IS the finding)_: backend env → ${COMETCHAT_*} refs (values in git-ignored .env; no secrets in tracked compose)
+  - _trigger evidence_: `proactive guard — pre-empts the known failure signature`
+
+
+<!-- sdk:cometchat-createuser-400-not-409 -->
+- **`SDK-gap:`** [CometChat REST /v3/users] Creating a user whose uid already exists returns
+  **HTTP 400 with `error.code = ERR_UID_ALREADY_EXISTS`**, NOT the conventional **409 Conflict**:
+  `{"error":{"message":"The uid <x> already exists...","code":"ERR_UID_ALREADY_EXISTS"}}`.
+  Any idempotent-provisioning routine written the standard way — "201 created, 409 already exists,
+  anything else is an error" — therefore throws on every call after the first.
+  - _impact_: server-side auth-token minting silently breaks for EVERY returning user. The FIRST login
+    for a new uid succeeds (201) and every subsequent login throws, so `cometchat_auth_token` comes back
+    empty and that user's chat stops working — while the app's own login still returns 200, so nothing
+    upstream notices. On fin this hit immediately, because verify's out-of-band pair seeding had already
+    created the very uids the app then tried to provision.
+  - _the harness taught this too_: `pipeline/prompts/integrate.md.tmpl` literally instructs
+    "call an idempotent CometChat `createUser` (409 = already-exists = ok)", so codegen implements the
+    409-only check and inherits the bug. Prompt corrected alongside this entry.
+  - _fix the API/docs need_: return 409 for a duplicate uid, or document prominently that
+    already-exists is 400 + ERR_UID_ALREADY_EXISTS so integrators branch on error.code, not status.
+  - _workaround applied_: CometChatService.isAlreadyExists() accepts 409 OR (400 AND body contains
+    ERR_UID_ALREADY_EXISTS); the failure path now includes the response body, since a bare status code
+    made this indistinguishable from a credentials or payload error.
