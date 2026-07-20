@@ -116,6 +116,11 @@ local.properties
 .env.cometchat
 cometchat-app-config.json
 
+# Local agent tooling, not app source: .claude/skills/* are SYMLINKS into this machine's
+# cometchat-skills checkout. Tracked, they push ~120 broken symlinks to the PUBLIC use-case repo and
+# leak the local absolute path (/Users/<name>/...). They stay on disk for codegen either way.
+.claude/
+
 # Pipeline / demo artifacts (not app source)
 _demo/
 _logs/
@@ -147,7 +152,7 @@ def ensure_repo(repo: Path) -> None:
     # refresh a STALE ignore too (an existing repo created before .dart_define.json/local.properties
     # were added) so newly-ignored cred files are untracked below — not just fresh-repo creation.
     if not gi.exists() or "node_modules/" not in cur or ".dart_define.json" not in cur \
-            or "target/" not in cur:
+            or "target/" not in cur or ".claude/" not in cur:
         gi.write_text(GITIGNORE)
     if not fresh:  # existing repo — drop any tracked files the .gitignore now ignores
         code, tracked = git(repo, "ls-files", "-ci", "--exclude-standard")
