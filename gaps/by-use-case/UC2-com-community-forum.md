@@ -1,3 +1,10 @@
+> **UC2 · Community forum (`com`)** — threaded community forum: group discussion with chat + voice/video calls.
+> **Stack:** Flutter v6 for web + Android + iOS (**one** codebase spanning all three) · PHP backend — **1 codebase**.
+> **CometChat:** Flutter v6 UI Kit + Calls. *Richest ledger — most of the Flutter-calls / go_router cluster lives here.*
+> **Gaps recorded: 16.** _Source: `pipeline-state/gaps/com.md` — edit there, not here._
+
+---
+
 ## Community forum (com) — backend
 
 - none

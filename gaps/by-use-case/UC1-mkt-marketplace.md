@@ -1,3 +1,10 @@
+> **UC1 · Marketplace (`mkt`)** — buyer/seller marketplace: listings, orders, and in-app chat + calls between buyer and seller.
+> **Stack:** Next.js web · React Native (Expo) for Android + iOS (one shared codebase) · Python backend — **2 codebases**.
+> **CometChat:** React UI Kit (web) + React Native UI Kit (mobile) + Calls SDK.
+> **Gaps recorded: 7.** _Source: `pipeline-state/gaps/mkt.md` — edit there, not here._
+
+---
+
 # Marketplace (mkt) — CometChat skills & MCP-docs inconsistencies
 
 > Scope: ONLY genuine gaps in the CometChat **skills** or **MCP docs** (and CometChat **SDK**

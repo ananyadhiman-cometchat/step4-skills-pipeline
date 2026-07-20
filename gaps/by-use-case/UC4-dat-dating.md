@@ -1,3 +1,10 @@
+> **UC4 · Dating (`dat`)** — dating app: browse profiles → like → match → chat + voice/video call with your match.
+> **Stack:** React web · React Native (Expo SDK 52 / RN 0.76) for Android + iOS (one shared codebase) · Python (FastAPI) backend — **2 codebases**.
+> **CometChat:** React UI Kit v6 (web) + React Native UI Kit v5 (mobile) + Calls SDK.
+> **Gaps recorded: 8.** _Source: `pipeline-state/gaps/dat.md` — edit there, not here._
+
+---
+
 # dat — CometChat skills/SDK/docs inconsistencies (self-heal witnessed)
 
 ## Auto-repaired (self-heal witnessed — the fix's existence IS the finding)

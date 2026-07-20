@@ -9,17 +9,19 @@ place. **Start with [`CONSOLIDATED_GAPS.md`](CONSOLIDATED_GAPS.md).**
 |---|---|---|
 | **[CONSOLIDATED_GAPS.md](CONSOLIDATED_GAPS.md)** | **Start here.** All findings de-duplicated into **17 themes**, ranked by impact × recurrence, each with symptom → workaround → *the ask for CometChat*. | You want the actionable picture / to hand to the CometChat team |
 | [MASTER_GAPS.md](MASTER_GAPS.md) | Auto-generated rollup: the marker tally + every per-UC file concatenated verbatim. | You want the raw, complete record |
-| [by-use-case/](by-use-case/) | The four per-use-case ledgers, as written during each build. | You're digging into one use case |
+| [by-use-case/](by-use-case/) | The per-use-case ledgers, each with a short use-case + tech-stack intro. | You're digging into one use case |
+| [refresh.py](refresh.py) | Re-syncs this bundle from the live ledger (rollup + lint + intros). | The ledgers changed |
 
 ## Tally (as of this export)
 
-| UC | Use case | Stack (web / mobile / backend) | Gap markers |
-|---|---|---|--:|
-| UC1 | Marketplace (`mkt`) | Next.js / React Native (Expo) / Python | **7** |
-| UC2 | Community forum (`com`) | Flutter v6 (all 3) / PHP | **16** |
-| UC3 | Delivery (`del`) | Angular / Android-Compose-v6 + iOS-Swift / Node | **11** |
-| UC4 | Dating (`dat`) | React / React Native / Python | **8** |
-| | | **Total** | **42** |
+| UC | Use case | Stack (web / mobile / backend) | Codebases | Gap markers |
+|---|---|---|:--:|--:|
+| UC1 | Marketplace (`mkt`) | Next.js / React Native (Expo) / Python | 2 | **7** |
+| UC2 | Community forum (`com`) | Flutter v6 (all 3) / PHP | 1 | **16** |
+| UC3 | Delivery (`del`) | Angular / Android-Compose-v6 + iOS-Swift / Node | 3 | **11** |
+| UC4 | Dating (`dat`) | React / React Native (Expo 52) / Python | 2 | **8** |
+| UC5 | Fintech support (`fin`) | Vue 3 / Android-Compose-v6 + iOS-Swift / Java-Spring | 3 | **1** *(in progress)* |
+| | | | **Total** | **43** |
 
 **By bucket:** docs-mcp 12 (coverageGap 4 · staleness 4 · docsEscape 4) · skills 15 (missedTrigger 14 ·
 falseTrigger 1) · sdk 15 (SDK-gap).
@@ -33,18 +35,15 @@ placement + the prerequisite story in the skills would retire most repeat offend
 The **live** ledger the pipeline reads/writes is `pipeline-state/gaps/<slug>.md`, and the rollup is the
 repo-root `MASTER_GAPS.md`. Edit those; this folder is an export for sharing and will go stale.
 
-Refresh this bundle:
+Refresh this bundle — **one command** (regenerates the rollup, runs the lint, re-copies each ledger and
+re-applies its intro header):
 
 ```bash
-cd ~/Desktop/automate
-cp pipeline-state/gaps/mkt.md gaps/by-use-case/UC1-mkt-marketplace.md
-cp pipeline-state/gaps/com.md gaps/by-use-case/UC2-com-community-forum.md
-cp pipeline-state/gaps/del.md gaps/by-use-case/UC3-del-delivery.md
-cp pipeline-state/gaps/dat.md gaps/by-use-case/UC4-dat-dating.md
-cp MASTER_GAPS.md            gaps/MASTER_GAPS.md
-# regenerate the rollup + lint first if the ledgers changed:
-python3 -c "import sys;sys.path.insert(0,'pipeline');from lib import gaps;print(gaps.rebuild({'gaps_dir':'pipeline-state/gaps','master_gaps':'MASTER_GAPS.md'})['counts'])"
+cd ~/Desktop/automate && python3 gaps/refresh.py
 ```
+
+When a new use case starts recording gaps, add its intro to the `INTROS` dict in
+[`refresh.py`](refresh.py) — the script tells you which ledgers have no intro configured yet.
 
 ## What is / isn't in scope
 
@@ -56,7 +55,9 @@ python3 -c "import sys;sys.path.insert(0,'pipeline');from lib import gaps;print(
 
 ## Status
 
-- UC1–UC4 complete. **UC5 (`fin` — Fintech: Vue 3 / Android-Compose-v6 + iOS-Swift / Java-Spring) is in
-  progress** — its gaps aren't recorded yet, so no `fin` file here.
+- UC1–UC4 complete. **UC5 (`fin`) is in progress** — 1 gap recorded so far (it has already re-hit the
+  recurring web calls-CSS-vars SDK gap on its Vue slice, making that **4 use cases**: mkt · del · dat · fin).
+- **Known open item:** del's iOS in-call crash (theme **C7**) has a confirmed one-line fix
+  (`CometChatCallsSDK ~> 5.0`) that is **not yet written into `del.md`** — another session owns that edit.
 - Every entry carries a canonical marker (`SDK-gap:` · `missedTrigger:` · `coverageGap:` · `staleness:` ·
   `docsEscape:` · `falseTrigger:`); `gaps.lint()` rejects entries that don't, so the tally stays trustworthy.

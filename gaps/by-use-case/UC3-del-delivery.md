@@ -1,3 +1,10 @@
+> **UC3 · Delivery (`del`)** — delivery app: orders tracked across customer, courier and store, with chat + calls.
+> **Stack:** Angular web · Android (Kotlin/Compose, UI Kit v6) · iOS (native Swift) · Node backend — **3 separate codebases**.
+> **CometChat:** Angular UI Kit · Android v6 Compose · iOS Swift UI Kit + Calls SDK. *Most iOS-native packaging/calls gaps.*
+> **Gaps recorded: 11.** _Source: `pipeline-state/gaps/del.md` — edit there, not here._
+
+---
+
 ## Delivery (del) — backend
 
 - coverageGap: "CometChat REST API error code for duplicate user creation (POST /users with existing UID)" — `ERR_BAD_REQUEST` is confirmed from the error-guide, but was not listed under User Errors section specifically; inferred from the general errors table.
