@@ -8,7 +8,7 @@ ROOT="$HOME/Desktop/automate"
 RUN="$ROOT/runs/$SLUG"
 STATE="$ROOT/pipeline-state"
 
-stages=(preflight provision-app build boot push-main integrate verify push-branch)
+stages=(preflight provision-app build containerize boot demo push-main integrate verify readme push-branch teardown)
 
 BAR="════════════════════════════════════════════════════════════"
 while true; do

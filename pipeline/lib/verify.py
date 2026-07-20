@@ -132,9 +132,10 @@ def _ios_dd(d: Path) -> str:
     return dd
 
 
-# Markers that an OUTGOING call can actually be placed from this client. The incoming-call banner is
-# deliberately NOT here: mounting it alone is exactly the false-positive we are guarding against.
-_CALL_MARKERS = (
+# Markers that an OUTGOING call can actually be placed from this client, in two families.
+#
+# EXPLICIT — the app itself places the call or mounts a call surface.
+_CALL_MARKERS_EXPLICIT = (
     "initiateCall",            # SDK call placement, every stack
     "CometChatCallButtons",    # kit call button (React / RN / Compose / Flutter)
     "CometChatOutgoingCall",
@@ -142,6 +143,22 @@ _CALL_MARKERS = (
     "startCall", "startSession",
     "launchOutgoingCallScreen",
 )
+# KIT-MANAGED — the calling MODULE is initialised and the kit renders/presents the call surfaces
+# itself, so no explicit marker ever appears in app source. iOS is the case in point:
+# CometChatMessageHeader auto-renders its call buttons and presents outgoing→ongoing once
+# CometChatCalls.init has run, so gating on the explicit family alone REJECTED a correct integration.
+# This family is also the more meaningful signal: the integrate prompt's own rule is that a call
+# button without its prerequisites is an INERT no-op — initialisation is what makes calling real.
+_CALL_MARKERS_INIT = (
+    "CometChatCalls.init", "CallAppSettingsBuilder", "callsAppSettings",   # iOS / native
+    "CometChatUIKitCalls.init", "enableCalls",                             # Flutter v6
+    "setCallingEnabled", "setEnableCalling",                               # Angular / Android v6
+    "inAppIncomingCall",
+)
+# The incoming-call banner is deliberately in NEITHER family: mounting it alone, with no init and no
+# outgoing surface, is precisely the false positive this gate exists to catch (fin shipped exactly
+# that on both native clients and passed a compile-only gate).
+_CALL_MARKERS = _CALL_MARKERS_EXPLICIT + _CALL_MARKERS_INIT
 _CALL_SRC_EXT = {".swift", ".kt", ".java", ".ts", ".tsx", ".js", ".jsx", ".vue", ".dart"}
 _CALL_SKIP_DIR = {"node_modules", "Pods", "build", "dist", ".git", "DerivedData", ".gradle", "target"}
 
