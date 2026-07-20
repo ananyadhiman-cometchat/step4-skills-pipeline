@@ -21,7 +21,7 @@
     "spec": 20,
     "provision": 40,
     "build": 100,
-    "integrate": 120,
+    "integrate": 220,
     "judge": 12,
     "critic": 120
   },

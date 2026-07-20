@@ -176,7 +176,10 @@ class IOSNativeProvider:
         code, o = _sh(f'{mobile.UTF8}; [ -f Podfile ] && pod install || true; '
                       f'xcodebuild {flag} {ws.name if ws else scheme} -scheme {scheme} -configuration Debug '
                       f"-sdk iphonesimulator -destination 'generic/platform=iOS Simulator' "
-                      f'-derivedDataPath {dd} -quiet build', cwd=str(app))
+                      # EXCLUDED_ARCHS: the generic destination builds arm64 AND x86_64, and the
+                      # x86_64 pass cannot resolve CometChatCardsSwift from the UIKit's
+                      # .swiftinterface. Every Apple-Silicon simulator is arm64.
+                      f'EXCLUDED_ARCHS=x86_64 -derivedDataPath {dd} -quiet build', cwd=str(app))
         appbin = next(Path(f"{dd}/Build/Products").glob("Debug-iphonesimulator/*.app"), None) if code == 0 else None
         # Pass the PROJECT-derived bundle id so a plist that still lacks CFBundleIdentifier can't silently
         # fall through, and hand it back as appId so the demo stage can arm the mobile LOGIN gate.

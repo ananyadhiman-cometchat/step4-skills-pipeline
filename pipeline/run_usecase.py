@@ -101,9 +101,13 @@ ios/Pods/
 .expo/
 .kotlin/
 
-# Web build output
+# Web build output. `dist/` is Vite/Vue's (and Angular's) output dir — tracked, it churns 100+
+# content-hashed asset files on EVERY build and bloats the public repo. The web Dockerfile builds it
+# inside the image (`npm run build` → COPY --from=builder /app/dist), so it is never needed in git.
 .next/
 out/
+dist/
+**/dist/
 
 # Secrets — build-time creds are injected by the pipeline (mobile.write_cometchat_env). Commit only .example.
 .env
@@ -122,6 +126,7 @@ cometchat-app-config.json
 .claude/
 
 # Pipeline / demo artifacts (not app source)
+_run/
 _demo/
 _logs/
 _reports/
@@ -152,7 +157,7 @@ def ensure_repo(repo: Path) -> None:
     # refresh a STALE ignore too (an existing repo created before .dart_define.json/local.properties
     # were added) so newly-ignored cred files are untracked below — not just fresh-repo creation.
     if not gi.exists() or "node_modules/" not in cur or ".dart_define.json" not in cur \
-            or "target/" not in cur or ".claude/" not in cur:
+            or "target/" not in cur or ".claude/" not in cur or "**/dist/" not in cur:
         gi.write_text(GITIGNORE)
     if not fresh:  # existing repo — drop any tracked files the .gitignore now ignores
         code, tracked = git(repo, "ls-files", "-ci", "--exclude-standard")

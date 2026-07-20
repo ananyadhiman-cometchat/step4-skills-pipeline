@@ -364,15 +364,35 @@ def _fix_ios_calls_sdk_version(ctx) -> tuple[bool, str]:
     pods = _ios_companion_podfiles(ctx)
     if not pods:
         return False, "no CometChatUIKitSwift Podfile found"
-    patched = 0
+    patched, added = 0, 0
     for pf in pods:
         t = pf.read_text()
-        # Only rewrite an explicit 4.x pin — absent/unpinned already resolves to the 5.x line.
+        if not re.search(r"pod\s+['\"]CometChatCallsSDK['\"]", t):
+            # NO CometChatCallsSDK pod at all. The comment this replaced claimed "absent/unpinned
+            # already resolves to the 5.x line" — that is WRONG: absent means the pod is never
+            # installed, so the calls ENGINE is simply not linked. The calling UI still renders (the
+            # incoming-call banner appears, which reads as "calls work"), but CometChat.initiateCall
+            # fails at runtime with "Framework not installed please install" and no call is ever
+            # placed. Observed on fin, where integrate codegen emitted a Podfile with only
+            # CometChatUIKitSwift — so the version-bump branch below had nothing to bump and the fix
+            # silently no-op'd. ADD the pod at the pinned 5.0 line.
+            line = ("  pod 'CometChatCallsSDK', '~> 5.0'   "
+                    "# calls ENGINE — without it initiateCall fails 'Framework not installed'\n")
+            m = re.search(r"^[ \t]*pod ['\"]CometChatUIKitSwift['\"].*\n", t, re.MULTILINE)
+            if not m:
+                continue
+            pf.write_text(t[:m.end()] + line + t[m.end():])
+            added += 1
+            continue
+        # An explicit 4.x pin crashes the in-call UI on iOS 26 → bump it to the 5.0 line.
         new = re.sub(r"(pod\s+['\"]CometChatCallsSDK['\"]\s*,\s*)['\"](?:~>\s*)?4[\d.]*['\"]",
                      r"\1'~> 5.0'", t)
         if new != t:
             pf.write_text(new)
             patched += 1
+    if added:
+        return True, (f"ADDED CometChatCallsSDK '~> 5.0' to {added} Podfile(s) (was absent → calls engine "
+                      f"unlinked)" + (f"; bumped 4.x in {patched}" if patched else ""))
     if not patched:
         return False, "CometChatCallsSDK not pinned to 4.x (nothing to bump)"
     return True, f"pinned CometChatCallsSDK '~> 5.0' (was 4.x) in {patched} Podfile(s)"

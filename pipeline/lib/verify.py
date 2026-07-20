@@ -5,7 +5,7 @@ self-assessment. Per STEP4_PIPELINE §3. e2e runner commands come from
 settings.verify.e2e; if unset, we record 'not-configured' rather than fake a pass.
 """
 from __future__ import annotations
-import json, os, re, shlex, subprocess, time, urllib.request
+import json, os, re, shlex, shutil, subprocess, time, urllib.request
 from pathlib import Path
 from lib import cometchat, mobile
 
@@ -108,7 +108,28 @@ def build_gate(kind: str, comp_dir: Path, env: dict | None = None) -> dict:
 # REQUIRED on Xcode 16/26: with only `-sdk iphonesimulator` and no destination, xcodebuild aborts
 # "Found no destinations for the scheme '<x>'" (exit 70) before building anything. The GENERIC simulator
 # destination needs no booted sim. mobile.build_ios already passed this; the compile gate never did.
-_IOS_DEST = ("-destination", "generic/platform=iOS Simulator")
+#
+# EXCLUDED_ARCHS=x86_64 is the necessary companion to that destination: `generic/platform=iOS Simulator`
+# builds BOTH arm64 and x86_64, and the x86_64 pass fails to resolve CometChatCardsSwift out of
+# CometChatUIKitSwift's .swiftinterface ("cannot find type 'CometChatCardsSwift' in scope") even with the
+# I7 companion pods installed — while the arm64 pass compiles cleanly. Every simulator on Apple Silicon
+# is arm64, so the x86_64 slice is dead weight that only breaks the build. (Adding the destination
+# without this is what turned a passing iOS gate into a failing one on fin.)
+_IOS_DEST = ("-destination", "generic/platform=iOS Simulator", "EXCLUDED_ARCHS=x86_64")
+
+
+def _ios_dd(d: Path) -> str:
+    """A FRESH per-component derivedDataPath for the iOS gate.
+
+    Xcode's shared DerivedData caches xcframework extraction under XCFrameworkIntermediates/. When a
+    build runs before `pod install` has settled, it can materialise an EMPTY
+    XCFrameworkIntermediates/CometChatSDK/CometChatStarscream.framework binary (from the Starscream
+    .swiftinterface files that ship inside the SDK's dSYMs) and then link against it forever after:
+    `ld: file is empty`. That poisoned cache survives retries, so a self-heal that fixes the real
+    problem still reports failure. Wiping a per-run path makes each attempt honest."""
+    dd = f"/tmp/step4-iosgate-{d.resolve().parent.name}-{d.name}"
+    shutil.rmtree(dd, ignore_errors=True)
+    return dd
 
 
 def _ios_gate(d: Path, env: dict | None = None) -> tuple[int, str]:
@@ -145,9 +166,11 @@ def _ios_gate(d: Path, env: dict | None = None) -> tuple[int, str]:
         if ws is None:  # pod install did not produce a workspace → surface its output, don't build the bare project
             return (pc or 1), "pod install did not produce an .xcworkspace:\n" + po
         return _run(["xcodebuild", "-workspace", ws.name, "-scheme", _ios_scheme(d, ws, env),
-                     "-sdk", "iphonesimulator", *_IOS_DEST, "build"], cwd=str(d), env=env)
+                     "-sdk", "iphonesimulator", *_IOS_DEST,
+                     "-derivedDataPath", _ios_dd(d), "build"], cwd=str(d), env=env)
     return _run(["xcodebuild", "-scheme", _ios_scheme(d, None, env),
-                 "-sdk", "iphonesimulator", *_IOS_DEST, "build"], cwd=str(d), env=env)
+                 "-sdk", "iphonesimulator", *_IOS_DEST,
+                 "-derivedDataPath", _ios_dd(d), "build"], cwd=str(d), env=env)
 
 
 def _ios_scheme(d: Path, ws: Path | None = None, env: dict | None = None) -> str:

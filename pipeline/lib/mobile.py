@@ -376,6 +376,7 @@ def build_ios(mobile_dir: Path, api_url: str) -> dict:
     cmd = (f'{UTF8}; pod install; export EXPO_PUBLIC_API_URL="{api_url}"; '
            f'xcodebuild -workspace {scheme}.xcworkspace -scheme {scheme} -configuration Release '
            f"-sdk iphonesimulator -destination 'generic/platform=iOS Simulator' "
+           f'EXCLUDED_ARCHS=x86_64 '   # arm64-only sim; x86_64 breaks CometChat interface resolution
            f'-derivedDataPath /tmp/iosbuild-{mobile_dir.parent.name} -quiet clean build')
     code, out = _sh(cmd, cwd=str(ios))
     app = next(Path(f"/tmp/iosbuild-{mobile_dir.parent.name}/Build/Products").glob("Release-*/*.app"), None) \
