@@ -543,6 +543,29 @@ def stage_demo(S, uc):
     if login_failed:
         die_gate(f"demo:{uc['slug']} mobile LOGIN failed on {login_failed} — the app launches but can't "
                  f"sign in (backend contract / decode / connectivity). tag=agent")
+    # DETAIL-SCREEN WALK — login→home alone leaves every detail screen unexercised, so a client can ship
+    # with all of them broken and still score a green demo. On fin exactly that happened: Android crashed
+    # to the launcher, iOS rendered a permanently blank view and web threw, all on ticket detail, while
+    # this stage reported OK and a human found it by hand. A list proves the collection endpoint; only a
+    # DETAIL screen exercises the single-resource endpoint, its sub-resources and the per-field decoding
+    # where null-tolerance bugs hide. The shots are judged by the vision rubric below (a blank/error
+    # detail screen is refuted there) rather than by a brittle per-use-case text assertion.
+    detail_tab = uc.get("detailTab")
+    if detail_tab:
+        for plat in ("android", "ios"):
+            if shots.get(f"{plat}-loggedin", {}).get("ok") and plat_app_id.get(plat):
+                try:
+                    dw = providers.detail_walk_and_shot(
+                        plat, plat_app_id[plat], li_email, li_pw, detail_tab,
+                        str(demo / f"{plat}-list.png"), str(demo / f"{plat}-detail.png"))
+                except Exception as e:
+                    dw = {"ok": False, "list": None, "detail": None, "tail": str(e)[:120]}
+                shots[f"{plat}-list"] = {"ok": bool(dw.get("list")), "path": dw.get("list")}
+                shots[f"{plat}-detail"] = {"ok": bool(dw.get("detail")), "path": dw.get("detail")}
+                print(f"  {plat} {detail_tab}→detail: "
+                      f"{'✓ reached detail screen' if dw.get('detail') else '✗ NOT REACHED — ' + str(dw.get('tail'))[:80]}")
+    else:
+        print(f"  (no uc.detailTab configured — detail-screen walk skipped for {uc['slug']})")
     # AUTOMATED mobile↔web call matrix (boot-2) — android/ios clients that built OK ring the web peer.
     # Parameterized per use case: the app id + the two call-test accounts (not mkt-hardcoded).
     # A Flutter-unified app's WEB peer is Flutter-web, where CometChat's SDK can't init (shared_preferences
@@ -582,6 +605,14 @@ def stage_demo(S, uc):
         vs += [{"name": p, "path": shots[p]["path"], "rubric": "feed_loaded",
                 "context": f"{uc['name']} {p} — should show real content (backend reached)"}
                for p in ("android-loggedin", "ios-loggedin") if shots.get(p, {}).get("path") and os.path.exists(shots[p]["path"])]
+        # The DETAIL screens carry the teeth for the detail-walk: `feed_loaded` refutes a blank screen,
+        # a spinner or an error state — which is exactly how fin's ticket detail failed on all three
+        # clients while login→home stayed green.
+        vs += [{"name": p, "path": shots[p]["path"], "rubric": "feed_loaded",
+                "context": f"{uc['name']} {p} — a DETAIL screen; must show the record's real fields, "
+                           f"not a blank view, spinner or error state"}
+               for p in ("android-list", "android-detail", "ios-list", "ios-detail")
+               if shots.get(p, {}).get("path") and os.path.exists(shots[p]["path"])]
         if vs:
             demo_review = shotreview.review(vs, uc["slug"], S, str(demo / "demo-review.html"))
             for r in demo_review.get("results", []):

@@ -21,10 +21,14 @@ _LAYOUT = [
     ("Android", "phone", [
         ("android", "Launch", "The Android app launches.", False),
         ("android-loggedin", "Signed in", "Login succeeds and the home renders.", True),
+        ("android-list", "List", "The collection endpoint loads.", False),
+        ("android-detail", "Detail", "A single record opens with its real fields.", False),
     ]),
     ("iOS", "phone", [
         ("ios", "Launch", "The iOS app launches.", False),
         ("ios-loggedin", "Signed in", "Login succeeds and the home renders.", True),
+        ("ios-list", "List", "The collection endpoint loads.", False),
+        ("ios-detail", "Detail", "A single record opens with its real fields.", False),
     ]),
 ]
 # call-matrix screenshots the two-party runners drop into the demo dir (best-effort include)

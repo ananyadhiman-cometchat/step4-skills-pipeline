@@ -1,0 +1,63 @@
+# Walk INTO a detail screen and screenshot it. Params: APP_ID, EMAIL, PASSWORD, SUBMIT, TAB, ROLE.
+#
+# WHY THIS EXISTS: the demo stage only ever drove login -> home, so a client could ship with every
+# detail screen broken and still score a green demo. On fin all three clients were broken on the
+# ticket-detail screen (Android crashed to the launcher on a null field, iOS rendered a permanently
+# blank view, web threw) and the pipeline passed cleanly — a human found it by hand. A list screen
+# exercises a collection endpoint; only a DETAIL screen exercises the single-resource endpoint, its
+# sub-resources, and the per-field decoding that null-tolerance bugs hide in.
+#
+# Deliberately shallow and generic: tap the tab, tap the first row, screenshot. The screenshot is
+# handed to the vision judge (rubric detail_screen), which is what actually gives this teeth — a blank
+# or error-state detail screen is refuted there rather than by a brittle per-use-case text assertion.
+appId: ${APP_ID}
+---
+- launchApp: { clearState: true }
+- tapOn: { text: "Don't Show Again", optional: true }
+- tapOn: { text: "OK", optional: true }
+- runFlow:
+    when:
+      visible:
+        id: "email-input"
+    commands:
+      - tapOn: { id: "email-input" }
+      - eraseText
+      - inputText: ${EMAIL}
+      - tapOn: { id: "password-input" }
+      - eraseText
+      - inputText: ${PASSWORD}
+      - runFlow:
+          when:
+            platform: Android
+          commands:
+            - hideKeyboard
+      - runFlow:
+          when:
+            platform: iOS
+          commands:
+            - tapOn:
+                point: "50%,25%"
+- runFlow:
+    when:
+      notVisible:
+        id: "email-input"
+    commands:
+      - tapOn: { text: "${ROLE}", optional: true }
+      - waitForAnimationToEnd: { timeout: 3000 }
+- tapOn: { id: "login-submit", optional: true }
+- tapOn: { text: "${SUBMIT}", optional: true }
+- extendedWaitUntil: { notVisible: { text: "${SUBMIT}" }, timeout: 25000 }
+- tapOn: { text: "Not Now", optional: true }
+- tapOn: { text: "Never", optional: true }
+- waitForAnimationToEnd: { timeout: 4000 }
+# --- the list for this resource ---
+- tapOn: { text: "${TAB}" }
+- waitForAnimationToEnd: { timeout: 6000 }
+- takeScreenshot: /tmp/mobile-list
+# --- open the FIRST row. `index: 0` keeps this use-case agnostic: no row title is hardcoded, so the
+#     same flow works on tickets, orders, listings, bookings, ... ---
+- tapOn:
+    index: 0
+    point: "50%,42%"
+- waitForAnimationToEnd: { timeout: 7000 }
+- takeScreenshot: /tmp/mobile-detail

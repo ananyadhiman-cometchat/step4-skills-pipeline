@@ -296,6 +296,52 @@ def login_and_shot(platform: str, app_id: str, email: str, password: str, out_pn
     return {"ok": False, "shot": None, "tail": tail}
 
 
+def _maestro_device(platform: str) -> list[str]:
+    if platform != "ios":
+        return ["--device", "emulator-5554"]
+    out = subprocess.run(["xcrun", "simctl", "list", "devices", "booted"], text=True, capture_output=True).stdout
+    for line in out.splitlines():
+        if "Booted" in line and "(" in line:
+            return ["--device", line.split("(")[1].split(")")[0]]
+    return []
+
+
+def detail_walk_and_shot(platform: str, app_id: str, email: str, password: str, tab: str,
+                         list_png: str, detail_png: str,
+                         submit: str = "Sign In", role: str = "Member") -> dict:
+    """Log in, open `tab`, tap the FIRST row, and screenshot both the list and the DETAIL screen.
+
+    The demo stage previously stopped at login -> home, so every detail screen in the app was
+    unexercised: a client could ship with them all broken and still score a green demo. That is
+    exactly what happened on fin — Android crashed to the launcher, iOS rendered a permanently blank
+    view and web threw, all on ticket detail, while the pipeline reported OK. A list screen only
+    proves the collection endpoint; the DETAIL screen is what exercises the single-resource endpoint,
+    its sub-resources and the per-field decoding where null-tolerance bugs hide.
+
+    Returns {ok, list, detail, tail}. `ok` means the flow COMPLETED (we reached a detail screen); the
+    screenshots are then judged by the vision rubric, which is what actually refutes a blank/error
+    detail screen — deliberately no per-use-case text assertion here."""
+    maestro = os.path.expanduser("~/.maestro/bin/maestro")
+    flow = Path(__file__).resolve().parent.parent / "e2e" / "mobile_flows" / "detail_walk.flow.yaml"
+    cmd = [maestro, *_maestro_device(platform), "test", str(flow),
+           "-e", f"APP_ID={app_id}", "-e", f"EMAIL={email}", "-e", f"PASSWORD={password}",
+           "-e", f"SUBMIT={submit}", "-e", f"ROLE={role}", "-e", f"TAB={tab}"]
+    lsrc, dsrc = Path("/tmp/mobile-list.png"), Path("/tmp/mobile-detail.png")
+    lsrc.unlink(missing_ok=True); dsrc.unlink(missing_ok=True)
+    try:
+        p = subprocess.run(cmd, text=True, capture_output=True, timeout=360,
+                           env={**os.environ, "PATH": os.path.expanduser("~/.maestro/bin:") + os.environ.get("PATH", "")})
+        rc, tail = p.returncode, (p.stdout or "")[-220:]
+    except subprocess.TimeoutExpired:
+        rc, tail = 124, f"detail walk timed out (tab={tab})"
+    res = {"ok": rc == 0, "list": None, "detail": None, "tail": tail}
+    for src, dest, key in ((lsrc, list_png, "list"), (dsrc, detail_png, "detail")):
+        if src.exists():
+            Path(dest).write_bytes(src.read_bytes()); src.unlink()
+            res[key] = dest
+    return res
+
+
 def resolve_ios_bundle(app_dir) -> str | None:
     """iOS bundle id from the Xcode project — Flutter often generates a DIFFERENT id for iOS
     (camelCase, e.g. io.com.communityForum) than the Android applicationId (snake_case). Using the
