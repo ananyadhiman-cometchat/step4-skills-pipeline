@@ -119,3 +119,35 @@
   web timer). **Any vision rubric gated on a mobile in-call SCREENSHOT is a guaranteed false negative.**
   Grade mobile call state from the view hierarchy (`uiautomator dump`) or the peer, never the shot.
   Same class as the existing headless-web call carve-out, different platform.
+
+<!-- harness:ios-cometchat-creds -->
+- **`coverageGap:`** The iOS twin of the Android credentials gap. Codegen wires `Info.plist` to
+  `$(COMETCHAT_APP_ID)` and reads it via `Bundle.main.infoDictionary`, but scaffolds the xcode build
+  settings as `COMETCHAT_APP_ID = ""` / `COMETCHAT_AUTH_KEY = ""` and **nothing ever filled them in**.
+  The empty setting substitutes into the plist as an empty string → `AppConfig.cometchatAppID` is nil
+  → CometChat never initialises → the chat tab renders the kit's generic **"Oops! Looks like
+  something went wrong."**, which reads as a broken UI rather than as missing credentials.
+  - _fix_: `mobile.write_ios_cometchat_settings()` patches the pbxproj (Debug AND Release) from the
+    UC's `.env.cometchat`, so Xcode-driven builds get the same creds as pipeline-driven ones.
+
+<!-- sdk:ios-header-call-buttons -->
+- **`SDK-gap:`** On the explicit-pod iOS calls setup (`CometChatCallsSDK` as its own pod, initialised
+  by hand), `CometChatMessageHeader` renders **no call buttons** and there is no supported way to add
+  them to it: `hideVoiceCallButton/hideVideoCallButton = false` does nothing (the header only
+  populates its built-in pair when the kit's calling data-source is registered, which this path never
+  does), and `headerView.tailView.addArrangedSubview(CometChatCallButtons(...))` is silently dropped
+  when the header re-lays-out its tail content — the view tree showed NO call-button node at all.
+  Workaround: mount `CometChatCallButtons().set(user:).set(controller:)` into the app's OWN view,
+  constrained against the header. NB `buildButton(forUser:)` is a subclass override hook and does NOT
+  configure the buttons — `set(user:)` is the entry point.
+
+<!-- open:ios-outgoing-call-never-joins -->
+- **`SDK-gap:` (OPEN — not fixed)** iOS outgoing call rings the peer and shows the kit's
+  outgoing-call screen ("Calling…"), but when the callee accepts, the media session never
+  establishes and the caller logs **"Missed Call"**. Android→web and web→Android connect fine on the
+  same app/session, so this is iOS-side session establishment, not signalling. Suspected cause: this
+  app hand-writes `CometChatCalls.init` with its own pod, while the kit-default additive path expects
+  the vendored CallsSDK plus `enable(inAppIncomingCall: true)` ONLY — per `cometchat-ios-calls` §5,
+  hand-initialising is the standalone/custom-surface path and the caller must then implement
+  `CometChatCallDelegate.onOutgoingCallAccepted` → `generateToken` → `startSession` itself, which
+  this app does not do. **iOS is send-capable but not connect-capable until that is resolved.**

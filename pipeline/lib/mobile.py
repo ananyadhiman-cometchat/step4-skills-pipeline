@@ -256,6 +256,53 @@ def write_android_local_properties(andro: Path, extra: dict | None = None) -> di
     return props
 
 
+_IOS_CC_SETTINGS = {
+    "COMETCHAT_APP_ID": "COMETCHAT_APP_ID",
+    "COMETCHAT_REGION": "COMETCHAT_REGION",
+    "COMETCHAT_AUTH_KEY": "COMETCHAT_AUTH_KEY",
+}
+
+
+def write_ios_cometchat_settings(ios_dir: Path) -> dict:
+    """Inject the CometChat credentials into the native-iOS xcode build settings.
+
+    The iOS twin of write_android_local_properties(). Codegen wires Info.plist to
+    `$(COMETCHAT_APP_ID)` and reads it back via Bundle.main.infoDictionary, but scaffolds the build
+    settings as COMETCHAT_APP_ID = "" and nothing ever filled them in. The empty setting substitutes
+    into the plist as an empty string, so AppConfig.cometchatAppID is nil, CometChat never
+    initialises, and the chat tab renders the kit's generic "Oops! Looks like something went wrong."
+    — which reads as a broken UI rather than as missing credentials.
+
+    Patch the pbxproj directly (rather than passing settings on the xcodebuild command line) so a
+    build driven from Xcode or from any other path gets the same credentials.
+    """
+    pbx = next(iter(ios_dir.glob("*.xcodeproj/project.pbxproj")), None)
+    if not pbx:
+        return {}
+    creds = {}
+    for base in [ios_dir, *list(ios_dir.parents)[:5]]:
+        f = base / ".env.cometchat"
+        if not f.exists():
+            continue
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                if k.strip() in _IOS_CC_SETTINGS and v.strip():
+                    creds[k.strip()] = v.strip()
+        break
+    if not creds:
+        print("  WARN no .env.cometchat found — ios chat will show 'Oops!' "
+              "(coverageGap: ios build-time cometchat creds)")
+        return {}
+    txt = pbx.read_text()
+    for key, val in creds.items():
+        # Replace the scaffolded empty (or stale) value wherever it appears — Debug AND Release.
+        txt = re.sub(rf'({re.escape(key)} = )"[^"]*";', rf'\1"{val}";', txt)
+    pbx.write_text(txt)
+    return creds
+
+
 def build_android(mobile_dir: Path, api_url: str) -> dict:
     andro = mobile_dir / "android"
     _ensure_mobile_cometchat_creds(mobile_dir)
