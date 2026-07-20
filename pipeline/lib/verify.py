@@ -163,6 +163,73 @@ _CALL_SRC_EXT = {".swift", ".kt", ".java", ".ts", ".tsx", ".js", ".jsx", ".vue",
 _CALL_SKIP_DIR = {"node_modules", "Pods", "build", "dist", ".git", "DerivedData", ".gradle", "target"}
 
 
+# Accounts that exist ONLY to satisfy the test harness. `chat-a@<slug>.io` / `chat-b@<slug>.io` and the
+# `<slug>-cha-001` / `<slug>-chb-001` uids are precisely what cometchat.call_test_accounts() invents when
+# a use case has no `chatPair`, so seeing them in APP source means codegen wrote fake users to make the
+# harness pass.
+_SYNTHETIC_ACCOUNT_PATTERNS = (
+    r"chat-a@", r"chat-b@", r"-cha-00", r"-chb-00",
+    r"Chat Alpha", r"Chat Beta", r"\bChat A\b", r"\bChat B\b",
+)
+_SEED_HINTS = ("seed", "fixture", "bootstrap", "demo")
+_SRC_EXT = {".java", ".kt", ".swift", ".ts", ".tsx", ".js", ".jsx", ".vue", ".dart", ".py", ".php", ".go",
+            ".sql", ".json", ".yaml", ".yml"}
+# `_run` holds the harness's OWN failure records, which quote the offending account names verbatim —
+# scanning it makes the gate flag its own bug reports. Only APP source counts.
+_SKIP_DIR = {"node_modules", "Pods", "build", "dist", ".git", "DerivedData", ".gradle", "target",
+             "_demo", "_logs", "_reports", "_run", "pipeline-state", ".claude"}
+
+
+def synthetic_seed_accounts(repo: Path) -> list[str]:
+    """Find harness-only test accounts that codegen baked into the APP.
+
+    The failure this prevents (observed on fin): the use case had no `chatPair`, so the harness fell back
+    to inventing chat-a@fin.io / chat-b@fin.io — and codegen, seeing the harness expect them, SEEDED
+    those users into the backend, complete with their own tickets and transactions. Chat was then
+    "proven" between two users that the app's own demo-login screen could not even reach, while the real
+    personas went untested. An app that grows fake users to satisfy its test suite is a rigged pass, and
+    it is invisible to every compile/boot gate.
+
+    Returns a list of "path:line: snippet" hits (empty = clean)."""
+    hits: list[str] = []
+    rx = re.compile("|".join(_SYNTHETIC_ACCOUNT_PATTERNS))
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIR and not d.startswith(".")]
+        for fn in files:
+            if os.path.splitext(fn)[1] not in _SRC_EXT:
+                continue
+            p = Path(root) / fn
+            try:
+                lines = p.read_text(errors="ignore").splitlines()
+            except Exception:
+                continue
+            for i, line in enumerate(lines, 1):
+                if rx.search(line):
+                    hits.append(f"{p.relative_to(repo)}:{i}: {line.strip()[:110]}")
+    return hits
+
+
+def chat_pair_seeded(repo: Path, chat_pair: list[str]) -> list[str]:
+    """Which of the use case's REAL demo accounts are missing from the app's seed.
+
+    The mirror of synthetic_seed_accounts: chat/call tests must run between accounts the app genuinely
+    ships, so every chatPair email has to appear somewhere in the seed source."""
+    if not chat_pair:
+        return []
+    blob = []
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIR and not d.startswith(".")]
+        for fn in files:
+            if os.path.splitext(fn)[1] in _SRC_EXT and any(h in fn.lower() or h in root.lower()
+                                                           for h in _SEED_HINTS):
+                try:
+                    blob.append((Path(root) / fn).read_text(errors="ignore"))
+                except Exception:
+                    pass
+    text = "\n".join(blob)
+    return [e for e in chat_pair if e not in text]
+
+
 def calls_wired(comp_dir: Path) -> bool:
     """True if this client can actually PLACE a call.
 

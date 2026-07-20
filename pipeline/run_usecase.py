@@ -356,6 +356,26 @@ def stage_provision(S, uc):
     print(f"OK provision-app: {uc['slug']} — dedicated app created + creds written to {ue.name}"); return res
 
 
+def _no_synthetic_accounts_or_die(S, uc, repo, stage):
+    """Fail if the APP seeds harness-only test accounts, or omits its own chatPair accounts.
+
+    A use case with no `chatPair` used to make the harness invent chat-a@<slug>.io / chat-b@<slug>.io,
+    and codegen would then seed those fake users into the app so the tests passed — proving chat between
+    two users the demo-login screen cannot even reach. Nothing else catches this: it compiles, boots and
+    screenshots perfectly. Runs at build (where the seed is authored) and integrate (in case it is added
+    later)."""
+    synthetic = verify.synthetic_seed_accounts(repo)
+    if synthetic:
+        die_gate(f"{stage}:{uc['slug']} the app seeds HARNESS-ONLY test accounts — these exist purely to "
+                 f"satisfy the test and are unreachable from the app's own demo login, so any chat/call "
+                 f"proof using them is rigged. Seed the app's REAL demo personas and set `chatPair` in "
+                 f"use_cases.json instead. Offenders:\n  " + "\n  ".join(synthetic[:8]) + " tag=agent")
+    missing = verify.chat_pair_seeded(repo, uc.get("chatPair") or [])
+    if missing:
+        die_gate(f"{stage}:{uc['slug']} chatPair accounts {missing} are NOT in the app's seed — the "
+                 f"chat/call proof must run between accounts the app actually ships. tag=agent")
+
+
 def stage_build(S, uc):
     repo = state.repo_dir(S, uc["slug"]); repo.mkdir(parents=True, exist_ok=True)
     logs = repo / "_logs"
@@ -379,6 +399,7 @@ def stage_build(S, uc):
         runs.append({**c, **r, **g}); worst = max(worst, g["buildExitCode"])  # compile authoritative; agentOk gates truncation
     sha = ""
     if worst == 0:
+        _no_synthetic_accounts_or_die(S, uc, repo, "build")
         git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", f"baseline {uc['name']} (no CometChat)")
         _, sha = git(repo, "rev-parse", "HEAD"); sha = sha.strip()
     res = {"useCase": uc["name"], "slug": uc["slug"], "stack": uc["archetype"],
@@ -519,11 +540,22 @@ def stage_demo(S, uc):
     # reaches the backend (connectivity), which the launch screen alone doesn't. Uses a seeded account.
     # resolve the chat-test pair from the app's OWN demo accounts (chatPair) when configured — same
     # source of truth as verify, so mobile login/call use accounts the app actually seeded.
-    if uc.get("chatPair"):
-        _rp = cometchat.seed_and_resolve_pair(str(uc_env_file(S, uc)), uc, V.get("backend_url", "http://localhost:8080"), e2e_password(uc))
-        acc_pair = _rp if (_rp.get("web") and _rp["web"][1]) else cometchat.call_test_accounts(uc["slug"])
-    else:
-        acc_pair = cometchat.call_test_accounts(uc["slug"])
+    # chatPair is REQUIRED: it names two of the app's OWN demo accounts. Without it the harness used to
+    # fall back to inventing chat-a@<slug>.io / chat-b@<slug>.io — and codegen, seeing the harness expect
+    # them, SEEDED those fake users into the app just to make the test pass. On fin that produced two
+    # "Chat Alpha"/"Chat Beta" users that no demo-login button could even reach, carrying their own
+    # tickets and transactions, while chat between the app's real personas went untested. Testing an app
+    # with accounts that exist only for the test is the definition of a rigged pass, so this now fails.
+    if not uc.get("chatPair"):
+        die_gate(f"demo:{uc['slug']} has no `chatPair` in use_cases.json. Chat/call tests must run "
+                 f"between the app's OWN demo accounts (the ones its login screen offers), not "
+                 f"synthetic chat-a/chat-b users invented by the harness. tag=harness")
+    _rp = cometchat.seed_and_resolve_pair(str(uc_env_file(S, uc)), uc, V.get("backend_url", "http://localhost:8080"), e2e_password(uc))
+    if not (_rp.get("web") and _rp["web"][1]):
+        die_gate(f"demo:{uc['slug']} could not resolve chatPair {uc['chatPair']} via app login — those "
+                 f"accounts must exist in the app's seed and be loggable. Refusing to fall back to "
+                 f"synthetic accounts. tag=agent")
+    acc_pair = _rp
     li_acc = acc_pair; li_email = li_acc["mobile"][0]
     li_pw = e2e_password(uc)
     login_failed = []
@@ -831,6 +863,7 @@ def stage_integrate(S, uc):
         git(repo, "reset", "--hard", "main"); git(repo, "clean", "-fdq")
         ensure_repo(repo)  # refresh .gitignore on the feature branch so integrate never tracks the cred
         #                    files self-heal writes (.dart_define.json/local.properties) — untracks any too
+    _no_synthetic_accounts_or_die(S, uc, repo, "integrate")
     comps, worst, reports = _only_filter(prompts.expand_components(uc)), 0, []
     for c in comps:
         cdir = repo / c["dir"]
@@ -955,6 +988,14 @@ def stage_verify(S, uc):
     # discover their CometChat uid via app login, and seed a conversation between them. No dependency
     # on a chat-a/chat-b baseline seed (which drifts) — it uses accounts the app definitely has.
     password = e2e_password(uc)
+    # REQUIRED, same reasoning as stage_demo: with no chatPair the pair resolver falls back to invented
+    # chat-a/chat-b accounts, and codegen then seeds those fake users into the app so the test passes —
+    # proving chat works between two users no real person can log in as. Fail instead.
+    if not uc.get("chatPair"):
+        if dockerUp:
+            verify.compose_down(repo)
+        die_gate(f"verify:{uc['slug']} has no `chatPair` in use_cases.json. The cross-party chat proof "
+                 f"must use the app's OWN demo accounts, not synthetic chat-a/chat-b users. tag=harness")
     pair = cometchat.seed_and_resolve_pair(str(uc_env_file(S, uc)), uc, V.get("backend_url", "http://localhost:8080"), password)
     obs.event(S, uc["slug"], "verify", "chat_pair", mode=pair.get("mode"), ok=pair.get("ok"),
               web=pair["web"][0], mobile=pair["mobile"][0])
