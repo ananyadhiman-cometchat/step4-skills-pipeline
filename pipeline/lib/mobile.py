@@ -197,10 +197,69 @@ def _ensure_mobile_cometchat_creds(mobile_dir: Path):
         print(f"  self-heal (mobile cometchat creds) skipped: {e}")
 
 
+_CC_ENV_TO_PROP = {
+    "COMETCHAT_APP_ID": "cometchat.appId",
+    "COMETCHAT_REGION": "cometchat.region",
+    "COMETCHAT_AUTH_KEY": "cometchat.authKey",
+}
+
+
+def _cometchat_props_for(andro: Path) -> dict:
+    """Read the use case's CometChat credentials out of its .env.cometchat, keyed the way
+    app/build.gradle.kts expects to find them in local.properties."""
+    for base in [andro, *list(andro.parents)[:5]]:
+        f = base / ".env.cometchat"
+        if not f.exists():
+            continue
+        vals = {}
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            prop = _CC_ENV_TO_PROP.get(k.strip())
+            if prop and v.strip():
+                vals[prop] = v.strip()
+        return vals
+    return {}
+
+
+def write_android_local_properties(andro: Path, extra: dict | None = None) -> dict:
+    """Write local.properties WITHOUT dropping keys that are already in it.
+
+    Native-Android codegen reads the CometChat credentials FROM local.properties —
+    `localProps.getProperty("cometchat.appId", "")` — so a writer that truncates the file down to
+    just `sdk.dir=` silently ships an APK whose BuildConfig.COMETCHAT_APP_ID is the empty string.
+    The app then logs "CometChat credentials not configured — chat disabled", skips init, and
+    HARD-CRASHES on the first SDK call, because CometChat.getLoggedInUser()/logout() throw
+    ("Please call the CometChat.init() method ...") instead of returning null. Opening the Chat tab
+    or tapping Sign Out drops the user to the launcher.
+
+    A web-only verify cannot see any of this, which is how fin shipped an Android client whose chat
+    had never once worked. So: merge, never clobber, and inject the creds from .env.cometchat.
+    """
+    lp = andro / "local.properties"
+    props: dict[str, str] = {}
+    if lp.exists():
+        for line in lp.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                props[k.strip()] = v.strip()
+    props["sdk.dir"] = str(SDK)
+    props.update(_cometchat_props_for(andro))
+    props.update(extra or {})
+    lp.write_text("".join(f"{k}={v}\n" for k, v in props.items()))
+    if not props.get("cometchat.appId"):
+        print("  WARN local.properties has no cometchat.appId — android chat will be DISABLED "
+              "(coverageGap: android build-time cometchat creds)")
+    return props
+
+
 def build_android(mobile_dir: Path, api_url: str) -> dict:
     andro = mobile_dir / "android"
     _ensure_mobile_cometchat_creds(mobile_dir)
-    (andro / "local.properties").write_text(f"sdk.dir={SDK}\n")
+    write_android_local_properties(andro)
     # RN/Expo prebuild references @color/splashscreen_background but often omits it from colors.xml →
     # assembleRelease resource-linking fails. Proactively define it (idempotent, records the codegen gap).
     try:

@@ -147,7 +147,9 @@ class AndroidNativeProvider:
 
     def demo(self, ctx) -> dict:
         app = ctx["app_dir"]; demo = ctx["demo_dir"]; _guards(ctx)
-        (app / "local.properties").write_text(f"sdk.dir={mobile.SDK}\n")
+        # MERGE — truncating this file to sdk.dir strips the cometchat.* creds that
+        # build.gradle.kts reads, shipping an APK with chat disabled that crashes on the Chat tab.
+        mobile.write_android_local_properties(app)
         out = {}
         if mobile.boot_android():
             code, o = _sh(f'export JAVA_HOME="{mobile.JDK17}"; export ANDROID_HOME="{mobile.SDK}"; '

@@ -93,3 +93,29 @@
   - _workaround applied_: CometChatService.isAlreadyExists() accepts 409 OR (400 AND body contains
     ERR_UID_ALREADY_EXISTS); the failure path now includes the response body, since a bare status code
     made this indistinguishable from a credentials or payload error.
+
+## Harness defects found by driving the real clients (fin, 2026-07-20)
+
+<!-- harness:android-cometchat-creds -->
+- **`coverageGap:`** Native-Android codegen reads the CometChat credentials out of `local.properties`
+  (`localProps.getProperty("cometchat.appId", "")`), but **nothing in the pipeline ever wrote those
+  keys** — and two writers (`lib/providers.py` AndroidNativeProvider.demo, `lib/mobile.py`
+  build_android) truncated the file to `sdk.dir=` on every run. Every fin APK therefore shipped with
+  `BuildConfig.COMETCHAT_APP_ID == ""`, logged "CometChat credentials not configured — chat disabled",
+  skipped init, and then **hard-crashed the process** on the first SDK call: `CometChat.getLoggedInUser()`
+  and `CometChatUIKit.logout()` THROW ("Please call the CometChat.init() method ...") instead of
+  returning null/erroring via their callback. Opening the Chat tab or tapping Sign Out threw the user
+  to the launcher. Android chat had **never once worked** on this use case.
+  - _why verify missed it_: verify proves chat on **web** only; the android leg was never driven, so a
+    client that could not initialise chat at all still passed every gate.
+  - _fix_: `mobile.write_android_local_properties()` — merges instead of clobbering and injects
+    `cometchat.appId/region/authKey` from the UC's `.env.cometchat`; warns when appId resolves empty.
+
+<!-- harness:mobile-incall-screencap -->
+- **`falseTrigger:`** `adb screencap` captures the Android in-call screen as a **fully black frame** —
+  the CometChat ongoing-call surface is a hardware/WebRTC surface that screencap cannot read. The call
+  was genuinely connected at the time (web peer showed both participants + audio activity; the android
+  view hierarchy showed "Ongoing call", both participant tiles and a running 01:03 timer matching the
+  web timer). **Any vision rubric gated on a mobile in-call SCREENSHOT is a guaranteed false negative.**
+  Grade mobile call state from the view hierarchy (`uiautomator dump`) or the peer, never the shot.
+  Same class as the existing headless-web call carve-out, different platform.
