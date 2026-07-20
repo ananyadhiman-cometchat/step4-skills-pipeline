@@ -151,3 +151,33 @@
   hand-initialising is the standalone/custom-surface path and the caller must then implement
   `CometChatCallDelegate.onOutgoingCallAccepted` → `generateToken` → `startSession` itself, which
   this app does not do. **iOS is send-capable but not connect-capable until that is resolved.**
+
+## iOS incoming calls RESOLVED + gallery per-platform shots (fin, 2026-07-21)
+
+<!-- resolved:ios-incoming-call -->
+- **`SDK-gap:` (RESOLVED)** iOS received NO incoming calls (no ring/toast) though chat + outgoing
+  worked. TWO stacked causes, both non-obvious:
+  1. **Realtime socket never established.** `CometChatUIKit.init`/login authenticates over REST and
+     can fetch conversations, but the websocket that delivers incoming calls + presence was not
+     brought up — so the device showed OFFLINE ("Last seen …") and the call listener, though
+     registered, never fired. Outgoing still worked because `initiateCall` is REST. Fix:
+     `UIKitSettings.autoEstablishSocketConnection(bool: true)` AND an explicit `CometChat.connect()`
+     after login AND on the restored-session path (relaunch does not re-establish the socket on its
+     own; first connect often returns a transient `WSError 1` then succeeds on retry).
+  2. **The kit's `CometChatIncomingCall` VC renders EMPTY on iOS 26** — presented modally, embedded,
+     via `.fullScreenCover`, or in a dedicated `UIWindow`, it builds (onAppear/completion fire) but
+     draws nothing. Replaced with a custom SwiftUI ring. The ring only actually displayed once it was
+     embedded with PROPER view-controller containment (`root.addChild(host)` + `host.view` added to
+     `root.view` + `didMove`): a `UIHostingController.view` added as a bare subview, or a
+     `.fullScreenCover`/ZStack-sibling of a TabView, never runs its SwiftUI render pass on iOS 26.
+     Also disable `enable(inAppIncomingCall: true)` so the kit's own (empty) auto-present doesn't
+     occupy the presentation slot. Verified end-to-end: Android(Alice)→iOS(Bob) rings, Accept
+     connects, both peers live (iOS ongoing surface renders fine — only the INCOMING VC was broken).
+
+<!-- harness:gallery-per-platform-call-shots -->
+- **`falseTrigger:` (harness)** demo_gallery.py appended the SAME web-captured call screenshots
+  (`callee-ringing-*`, `caller-ongoing-*`) to BOTH the Android and iOS sections — the browser call UI
+  shown under an "Android"/"iOS" heading. Now reads the REAL per-platform mobile captures
+  (`mobile-incoming-<plat>-*`, `mobile-ongoing-<plat>-*` from twoparty_mobile) and content-hash-dedups
+  so a stale/duplicated shot (twoparty_mobile's pull_shot copies a leftover /tmp capture when the
+  accept flow finds no widget) can't appear under two platforms.

@@ -10,7 +10,7 @@ The pipeline (Python) can only WRITE the file; the agent/human publishes it (Art
 locally at the CP1 checkpoint. Images are base64-embedded so the file is portable (e.g. to a phone).
 """
 from __future__ import annotations
-import base64, os, html, subprocess
+import base64, os, html, subprocess, hashlib
 
 # platform -> ordered (shot_key, title, proof, is_primary_login)
 _LAYOUT = [
@@ -31,11 +31,17 @@ _LAYOUT = [
         ("ios-detail", "Detail", "A single record opens with its real fields.", False),
     ]),
 ]
-# call-matrix screenshots the two-party runners drop into the demo dir (best-effort include)
-_CALL_SHOTS = [
-    ("callee-ringing-voice", "phone", "Incoming call", "The callee's device rings (voice)."),
-    ("caller-ongoing-voice", "phone", "Connected", "Caller reaches the live call surface."),
-    ("callee-ongoing-voice", "phone", "Connected", "Callee reaches the live call surface."),
+# Per-platform mobile call screenshots (captured by e2e/twoparty_mobile.py's `web-calls-mobile` leg):
+#   mobile-incoming-<platform>-<voice|video>.png  — the native incoming-call widget (Accept/Decline)
+#   mobile-ongoing-<platform>-<voice|video>.png    — the native in-call surface
+# These are REAL Android/iOS captures. They are NOT the web `callee-*`/`caller-*` shots — reusing the
+# web call screenshots for the mobile sections (as this module used to) showed the browser call UI
+# under an "Android"/"iOS" heading, which is exactly wrong. `<platform>` keys each shot to its own
+# section, and a content-hash de-dup (see build()) guarantees the same bytes can't appear twice — so
+# a stale/duplicated capture from a failed leg is dropped rather than shown under both platforms.
+_MOBILE_CALL_KINDS = [
+    ("incoming", "Incoming call", "The native device rings — Accept / Decline."),
+    ("ongoing", "Connected", "The native in-call surface after accept."),
 ]
 
 
@@ -79,11 +85,23 @@ def _platform_status(shots: dict, keys: list[str]) -> str:
     return "warn"
 
 
+def _shot_hash(path: str) -> str | None:
+    """Content hash of a screenshot, so the same bytes are never shown in two sections."""
+    if not path or not os.path.exists(path) or os.path.getsize(path) < 64:
+        return None
+    with open(path, "rb") as f:
+        return hashlib.sha1(f.read()).hexdigest()
+
+
 def build(demo_dir: str, shots: dict, mobile_calls: dict, uc: dict, out_path: str) -> str | None:
     """Render the demo gallery to out_path. Returns the path, or None if no shots were available."""
     name = uc.get("name") or uc.get("slug") or "App"
     cards_by_plat = []
     any_card = False
+    # Screenshots already placed in a section — a mobile call shot duplicated across a failed leg
+    # (twoparty_mobile's pull_shot copies a stale /tmp capture when the accept flow finds no widget)
+    # must not resurface under a second platform.
+    used_hashes: set[str] = set()
     for plat, dev, entries in _LAYOUT:
         keys = [k for k, *_ in entries]
         st = _platform_status(shots, keys)
@@ -97,12 +115,26 @@ def build(demo_dir: str, shots: dict, mobile_calls: dict, uc: dict, out_path: st
             alive = shots.get(key, {}).get("visionAlive")
             pill = ("Open issue", "warn") if alive is False or not shots.get(key, {}).get("ok") else ("Verified", "ok")
             figs.append((uri, title, proof, dev, pill))
-        # call-matrix shots for this mobile platform
+        # REAL per-platform mobile call shots for this platform (never the web call screenshots).
         if plat in ("Android", "iOS"):
-            for cs_key, cdev, ctitle, cproof in _CALL_SHOTS:
-                uri = _resize_b64(os.path.join(demo_dir, cs_key + ".png"))
-                if uri:
-                    figs.append((uri, ctitle, cproof, cdev, ("Verified", "ok")))
+            p = plat.lower()   # "android" / "ios"
+            for kind, ctitle, cproof in _MOBILE_CALL_KINDS:
+                # prefer video (richer), fall back to voice; take the first that both exists and is
+                # not a duplicate of a shot already shown (guards the stale-/tmp-copy failure mode).
+                for ct in ("video", "voice"):
+                    path = os.path.join(demo_dir, f"mobile-{kind}-{p}-{ct}.png")
+                    h = _shot_hash(path)
+                    if not h or h in used_hashes:
+                        continue
+                    uri = _resize_b64(path)
+                    if not uri:
+                        continue
+                    used_hashes.add(h)
+                    # The call is only "Verified" here if THIS platform's leg actually connected.
+                    leg_ok = any(mobile_calls.get(f"{p}-{ct2}") for ct2 in ("voice", "video"))
+                    pill = ("Verified", "ok") if leg_ok else ("Open issue", "warn")
+                    figs.append((uri, ctitle, cproof, "phone", pill))
+                    break
         if not figs:
             continue
         any_card = True
