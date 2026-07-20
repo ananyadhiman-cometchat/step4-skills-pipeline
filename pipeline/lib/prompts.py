@@ -103,7 +103,41 @@ def render_integrate(settings, uc: dict, comp: dict) -> str:
     return _tmpl("integrate.md.tmpl").format(
         name=uc["name"], slug=uc["slug"], comp=comp["name"], kind=comp["kind"],
         stack=comp["stack"], skills=", ".join(uc.get("skills", [])),
-        gaps_file=f"pipeline-state/gaps/{uc['slug']}.md", vue_note=vue_note)
+        gaps_file=f"pipeline-state/gaps/{uc['slug']}.md", vue_note=vue_note,
+        calls_note=_calls_note(uc, comp))
+
+
+def _calls_in_scope(uc: dict) -> bool:
+    """Does this use case ship voice/video? Read it off the spec-pin, which is the contract of record."""
+    if "calls" in uc:
+        return bool(uc["calls"])
+    spec = Path(__file__).resolve().parent.parent / "requirements" / f"{uc.get('slug','')}.md"
+    if not spec.exists():
+        return False
+    t = spec.read_text().lower()
+    return ("voice/video" in t) or ("video call" in t) or ("voice call" in t)
+
+
+def _calls_note(uc: dict, comp: dict) -> str:
+    """Tell the agent EXPLICITLY whether calling is in scope.
+
+    The template says "calls IF IN SCOPE" twice, but nothing in the rendered prompt ever told the agent
+    which it was — the spec is not passed and there is no flag. On fin (spec: "voice/video call
+    capability", "tap the voice/video call button → call UI renders") the iOS agent reasonably shipped
+    chat + the incoming-call banner and NO outgoing calling, and the compile-only gate passed it twice.
+    An unresolvable conditional in a prompt is a harness bug, not an agent error."""
+    if comp["kind"] in ("backend",) or not _calls_in_scope(uc):
+        return ""
+    return (
+        "CALLS ARE IN SCOPE for this use case — the spec pins voice/video calling, so chat alone is "
+        "INCOMPLETE and will be rejected. Implement the FULL round trip on this client, not just the "
+        "incoming-call banner (a banner on its own makes calling LOOK wired while no call can ever be "
+        "placed):\n"
+        "  1. initialize the calling module for this stack (per its calls skill),\n"
+        "  2. a call BUTTON on the chat/message surface that actually invokes initiateCall,\n"
+        "  3. the OUTGOING + ONGOING call surfaces, hosted so the call screen can present,\n"
+        "  4. the INCOMING call surface mounted above the navigation graph.\n"
+        "State in your final message which of these four you wired and where.")
 
 
 def _skill_family(stack: str, kind: str) -> str:

@@ -849,6 +849,20 @@ def stage_integrate(S, uc):
             if healed:
                 print(f"  self-heal integrate:{c['name']} → {[h['rule'] for h in healed]}; retrying")
                 g = verify.build_gate(c["kind"], cdir, env=ctx.get("env")); g["selfHealed"] = [h["rule"] for h in healed]
+        # FEATURE-PRESENCE GATE — the compile gate proves the code BUILDS, never that the feature was
+        # implemented. fin shipped an iOS client with chat + the incoming-call banner and NO outgoing
+        # calling at all, and passed this stage TWICE on compileExit=0 (a banner alone makes calling
+        # look wired while no call can ever be placed). Deterministic source scan, no LLM.
+        g["callsWired"] = None
+        if prompts._calls_in_scope(uc) and c["kind"] != "backend":
+            g["callsWired"] = verify.calls_wired(cdir)
+            if not g["callsWired"]:
+                fail_gate(S, uc, "integrate",
+                          f"integrate:{uc['slug']} {c['name']} — calls are IN SCOPE (the spec pins "
+                          f"voice/video) but NO outgoing-call wiring is present in {c['dir']}/: no "
+                          f"initiateCall / call button / outgoing-or-ongoing call surface. A clean "
+                          f"compile does not mean the feature exists. tag=agent",
+                          {"exit": 2, "compileExit": g["buildExitCode"]}, gate="calls-wired")
         # LAYER 2 — SKILLS CRITIC (concurrent, per-component). An adversarial reviewer reads THIS component's
         # diff + the build/self-heal log and extracts genuine CometChat skills/docs/SDK gaps the builder did
         # NOT self-report, with retraction discipline. Runs even on a CLEAN compile (most gaps are silent —

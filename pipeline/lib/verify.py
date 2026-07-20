@@ -132,6 +132,41 @@ def _ios_dd(d: Path) -> str:
     return dd
 
 
+# Markers that an OUTGOING call can actually be placed from this client. The incoming-call banner is
+# deliberately NOT here: mounting it alone is exactly the false-positive we are guarding against.
+_CALL_MARKERS = (
+    "initiateCall",            # SDK call placement, every stack
+    "CometChatCallButtons",    # kit call button (React / RN / Compose / Flutter)
+    "CometChatOutgoingCall",
+    "CometChatOngoingCall",
+    "startCall", "startSession",
+    "launchOutgoingCallScreen",
+)
+_CALL_SRC_EXT = {".swift", ".kt", ".java", ".ts", ".tsx", ".js", ".jsx", ".vue", ".dart"}
+_CALL_SKIP_DIR = {"node_modules", "Pods", "build", "dist", ".git", "DerivedData", ".gradle", "target"}
+
+
+def calls_wired(comp_dir: Path) -> bool:
+    """True if this client can actually PLACE a call.
+
+    Deterministic source scan — the compile gate proves the code builds, never that the feature is
+    there. fin's iOS client shipped chat plus a `CometChatIncomingCall` banner and no outgoing calling
+    whatsoever, and passed integrate twice on compileExit=0."""
+    d = Path(comp_dir)
+    for root, dirs, files in os.walk(d):
+        dirs[:] = [x for x in dirs if x not in _CALL_SKIP_DIR and not x.startswith(".")]
+        for fn in files:
+            if os.path.splitext(fn)[1] not in _CALL_SRC_EXT:
+                continue
+            try:
+                t = (Path(root) / fn).read_text(errors="ignore")
+            except Exception:
+                continue
+            if any(m in t for m in _CALL_MARKERS):
+                return True
+    return False
+
+
 def _ios_gate(d: Path, env: dict | None = None) -> tuple[int, str]:
     """iOS compile gate. When the app uses CocoaPods (a Podfile adding pods — e.g. CometChatUIKitSwift),
     the integrated code `import`s a pod module that ONLY exists after `pod install`, and the build must
