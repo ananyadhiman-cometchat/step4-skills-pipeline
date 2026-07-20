@@ -1044,7 +1044,9 @@ def stage_verify(S, uc):
         e2e = verify.run_chatcall_web(repo, a_email, password, web_url, shot)
         sdk_ok = bool(e2e.get("sdkReady"))
         matrix = verify.run_twoparty_web(repo, web_url, demo_dir, a_email, b_email, password,
-                                         env_file=str(uc_env_file(S, uc)), slug=uc["slug"])
+                                         env_file=str(uc_env_file(S, uc)), slug=uc["slug"],
+                                         # read the server-side call log as a REAL participant
+                                         reader_uid=pair["web"][1])
         twoparty_ok = bool(matrix.get("ok"))
         call_ok = twoparty_ok
         call_matrix = {"web-web": {"voice": bool(matrix.get("voice", {}).get("callWorks")),

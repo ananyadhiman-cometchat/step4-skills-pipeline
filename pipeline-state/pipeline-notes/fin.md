@@ -44,3 +44,24 @@ codegen — recorded here (not in `gaps/fin.md`) so the skills ledger stays hone
   - _trigger evidence_: `This API is experimental and is likely to change in the future` (MainActivity.kt:26)
   - _fix_: new `kotlin-optin` self-heal rule (`owner: harness`, deliberately NO `gap` field) appends the
     standard Compose opt-in markers to the module's `kotlinOptions.freeCompilerArgs`.
+
+### auto-recorded verify triage (fin)
+- [coverage] two-party web↔web call matrix incomplete — {'voice': {'callerLogin': True, 'calleeLogin': True, 'callerCallStarted': True, 'calleeRingVisible': True, 'calleeRingInOverlay': False, 'ringOffscreenBottomLeft': False, 'calleeAccepted': True, 'callerOngoing': True, 'calleeOngoing': True, 'callWork
+- [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)
+- [env] web CALL screens unrenderable headless — two-party WebRTC media can't be negotiated in an automated browser (caller stuck at 'Calling…', callee blank): web-call(fullscreen,controls), callee-ringing-voice(not_corner_toast), callee-ongoing-voice(fullscreen,no_app_chrome,no_chat_bleed,controls), callee-ringing-video(not_corner_toast), callee-ongoing-video(no_app_chrome). Call CONNECTION proven by machine evidence (callConnect/twoParty) + native↔native live matrix; these shots are ADVISORY. See gallery /Users/admin/Desktop/automate/runs/fin/_demo/shot-review.html
+
+### auto-recorded verify triage (fin)
+- [integration] cross-party message NOT received (real-time socket) — [{'received': False, 'error': None}, {'received': False, 'error': None}]
+- [coverage] two-party web↔web call matrix incomplete — {'voice': {'callerLogin': True, 'calleeLogin': True, 'callerCallStarted': False, 'calleeRingVisible': False, 'calleeRingInOverlay': False, 'ringOffscreenBottomLeft': False, 'calleeAccepted': False, 'callerOngoing': False, 'calleeOngoing': False, 'cal
+- [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)
+- [visual] Claude-vision flagged (GATING): chat-receive(list_scrolls,composer), web-call(fullscreen,controls), callee-ringing-voice(not_corner_toast), callee-ongoing-voice(fullscreen,no_app_chrome,no_chat_bleed,controls), callee-ringing-video(not_corner_toast), callee-ongoing-video(no_app_chrome) — see gallery /Users/admin/Desktop/automate/runs/fin/_demo/shot-review.html
+
+### auto-recorded verify triage (fin)
+- [coverage] two-party web↔web call matrix incomplete — {'voice': {'callerLogin': True, 'calleeLogin': True, 'callerCallStarted': True, 'calleeRingVisible': True, 'calleeRingInOverlay': False, 'ringOffscreenBottomLeft': False, 'calleeAccepted': True, 'callerOngoing': True, 'calleeOngoing': True, 'callWork
+- [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)
+- [env] web CALL screens unrenderable headless — two-party WebRTC media can't be negotiated in an automated browser (caller stuck at 'Calling…', callee blank): web-call(fullscreen,controls), callee-ringing-voice(not_corner_toast), callee-ongoing-voice(fullscreen,no_app_chrome,no_chat_bleed,controls), callee-ringing-video(not_corner_toast), callee-ongoing-video(fullscreen,no_app_chrome). Call CONNECTION proven by machine evidence (callConnect/twoParty) + native↔native live matrix; these shots are ADVISORY. See gallery /Users/admin/Desktop/automate/runs/fin/_demo/shot-review.html
+
+### auto-recorded verify triage (fin)
+- [coverage] two-party web↔web call matrix incomplete — {'voice': {'callerLogin': True, 'calleeLogin': True, 'callerCallStarted': True, 'calleeRingVisible': True, 'calleeRingInOverlay': False, 'ringOffscreenBottomLeft': False, 'calleeAccepted': True, 'callerOngoing': True, 'calleeOngoing': True, 'callWork
+- [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)
+- [env] web CALL screens unrenderable headless — two-party WebRTC media can't be negotiated in an automated browser (caller stuck at 'Calling…', callee blank): web-call(fullscreen,controls), callee-ringing-voice(not_corner_toast), callee-ongoing-voice(fullscreen,no_app_chrome,no_chat_bleed,controls), callee-ringing-video(not_corner_toast), callee-ongoing-video(no_app_chrome). Call CONNECTION proven by machine evidence (callConnect/twoParty) + native↔native live matrix; these shots are ADVISORY. See gallery /Users/admin/Desktop/automate/runs/fin/_demo/shot-review.html

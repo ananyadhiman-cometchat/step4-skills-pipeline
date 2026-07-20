@@ -520,7 +520,8 @@ def run_flutter_chat_receive_mobile(repo_dir: Path, api_url: str, env_file: str,
 
 def run_twoparty_web(repo_dir: Path, web_url: str, shot_dir: str,
                      caller_email: str, callee_email: str, password: str,
-                     env_file: str = "", slug: str = "", retries: int = 3) -> dict:
+                     env_file: str = "", slug: str = "", retries: int = 3,
+                     reader_uid: str | None = None) -> dict:
     """Two-party web↔web call matrix (voice + video). SIGNALING verdict — deterministic, not
     media-dependent: a leg passes when the ring reached the callee, Accept succeeded, AND CometChat
     logged the call as ANSWERED server-side (REST). Retries up to `retries` (retry-until-pass) to
@@ -549,7 +550,12 @@ def run_twoparty_web(repo_dir: Path, web_url: str, shot_dir: str,
                         except Exception:
                             pass
                 # server-side confirmation (media-independent), anchored to this attempt's accept
-                ans = cometchat.call_answered(env_file, slug, v.get("acceptedAt") or since) if env_file else {"answered": None}
+                # reader_uid MUST be an actual participant in THIS call. Defaulting to
+                # call_test_accounts() reads the log on behalf of the synthetic chat-a/chat-b user,
+                # who is not in the call (and may not exist at all) — so the check could only ever
+                # return answered=False and silently veto a call that genuinely connected.
+                ans = cometchat.call_answered(env_file, slug, v.get("acceptedAt") or since,
+                                              uid=reader_uid) if env_file else {"answered": None}
                 v["serverAnswered"] = ans.get("answered")
                 # Require the actual CONNECT (both ends on the ongoing-call surface), not just signaling —
                 # Chromium does real WebRTC with fake media, so a call that rings+accepts but never reaches
