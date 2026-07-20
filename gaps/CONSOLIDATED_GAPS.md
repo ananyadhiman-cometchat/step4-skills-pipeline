@@ -1,0 +1,86 @@
+# Consolidated CometChat Gaps — UC1–UC4
+
+> Genuine CometChat **skills / MCP-docs / SDK** gaps found building the Step-4 use cases, consolidated by
+> **theme** (not by use case) so recurrence is visible. Recurrence = fix priority: a gap that hits N use
+> cases is worth fixing in the skill/SDK before a one-off. Source of truth: `pipeline-state/gaps/<slug>.md`
+> (42 marker-tagged findings: mkt 7 · com 16 · del 11 · dat 8). Codegen/harness misses and retracted items
+> are excluded — those live in `pipeline-state/pipeline-notes/`.
+>
+> UCs: **mkt** = Marketplace (React / RN · Python) · **com** = Community forum (Flutter v6 · PHP) ·
+> **del** = Delivery (Angular / Android-Compose-v6 / iOS-Swift · Node) · **dat** = Dating (React / RN · Python).
+
+## Ranked by impact × recurrence (fix these first)
+
+| # | Gap (theme) | UCs hit | Type | § |
+|--:|---|:--:|---|:--:|
+| 1 | Runtime creds not injected → backend mints **empty auth token** → conversation list "Oops" | **4** · mkt com del dat | missedTrigger | A1 |
+| 2 | Prebuilt **call surfaces don't self-position** — ring/ongoing render off-flow or 0-height | **3** · mkt del dat | SDK-gap | C1 |
+| 3 | **Virtual devices ring but never connect media** — calls only truly verify on 2 real devices | **3** · com del dat | coverageGap | C4 |
+| 4 | **iOS in-call UI hard-crashes** (RN-bridge SIGSEGV) on `CometChatCallsSDK 4.2.3` / iOS 26 | 1 rec. · **affects all 5 native-iOS UCs** | SDK-gap | C7 |
+| 5 | Calling is a **silent no-op** until hidden prerequisites (init/enableCalls/navKey/perms) are wired | **2** · com dat | coverageGap | C2 |
+| 6 | **Placeholder/empty appId fails silently** (dials a dead host) instead of erroring | **2** · mkt dat | missedTrigger | A2 |
+| 7 | Web **message list won't scroll** without an app-provided bounded-height wrapper | **2** · mkt dat | missedTrigger | E1 |
+| 8 | REST create-user duplicate = **HTTP 400 `ERR_UID_ALREADY_EXISTS`**, not 409 | **2** · com del | staleness | A3 |
+| 9 | **Incoming-call overlay intercepts touches app-wide** (whole screen dead behind a toast) | **2** · del dat | SDK-gap | C3 |
+| 10 | SDK **ships broken artifacts** — RN UIKit uncompiled `.tsx`; iOS xcframeworks un-consumable | **2** · mkt del | SDK-gap | D1 |
+| 11 | RN **release build** needs cleartext + INTERNET in the MAIN manifest + iOS ATS | **2** · com dat | missedTrigger | F1 |
+| 12 | iOS **companion modules** (`CometChatStarscream`/`CometChatCardsSwift`) referenced but not vended | 1 · del (+telehealth/edtech) | SDK-gap | D2 |
+| 13 | Flutter **CallButtons + CallNavigationContext unusable with `MaterialApp.router`/go_router** | 1 · com | falseTrigger | C5 |
+| 14 | iOS **deployment-target drift**: skills say 13.0, `cometchat_calls_sdk` needs **15.1** | 1 · com | staleness | D3 |
+| 15 | RN **UIKit version floor**: `chat-uikit-react-native` needs **RN ≥ 0.76** (breaks Expo SDK 51) | 1 · dat | SDK-gap | D4 |
+| 16 | Calls-SDK **lifecycle traps**: eager init hijacks incoming · async `getLoggedInUser()` guard no-op · `joinSession` needs explicit login · incoming event carries only uid ("Unknown Caller") | 1 · com | SDK-gap/docsEscape | C6 |
+| 17 | iOS RN Podfile **`use_modular_headers!`** missing (pod deps don't define modules) | 1 · mkt | missedTrigger | F2 |
+
+---
+
+## A. Auth / provisioning
+
+**A1 — Empty auth token → "Oops" (hits 4/4).** The production/deployment skill wires `COMETCHAT_*` into code + `.env.example` but not the **runtime** env (docker-compose/service), so the backend mints an **empty** `cometchat_auth_token` and every client's conversation list errors "Oops". On dat, compounded by login/signup not calling `createUser` before minting (the user 404s → empty token). **Ask:** the deployment recipe must inject creds into the runtime env; the server recipe must `createUser` (idempotent) *before* minting.
+
+**A2 — Placeholder appId fails silently (mkt, dat).** With `your_app_id_here` / an empty `*_COMETCHAT_APP_ID`, the SDK dials a non-existent host, the socket never connects, and nothing surfaces (chat spins forever; calls never arrive). **Ask:** the SDK should **fail loudly** on a placeholder/invalid appId; the integrate recipe must write the real appId into `.env`.
+
+**A3 — Duplicate create-user is 400, not 409 (com, del).** `POST /v3/users` for an existing uid returns **HTTP 400 `{error.code: ERR_UID_ALREADY_EXISTS}`**, but the `cometchat-production` recipe branches on `status === 409`, so idempotent re-provision (re-seed/retry/signup collision) is treated as a hard failure. **Ask:** detect via `error.code === 'ERR_UID_ALREADY_EXISTS'`, not HTTP 409.
+
+## C. Calling — placement, lifecycle & testing
+
+**C1 — Call surfaces don't self-position (mkt, del, dat).** Across React (Standard mode) and Angular, the prebuilt `IncomingCall`/`OutgoingCall`/`OngoingCall` render **inline** wherever mounted: the ring appears as a bottom-left banner (callee can't find Accept → "Missed"); the ongoing surface inherits a 0-height/bounded box and the chat bleeds through. Root sub-cause: the calls SDK sizes its tile-grid with `calc(100% − var(--cometchat-calls-call-*-height))` but **never defines those vars** → `0px` → ResizeObserver throws "Container dimensions must be positive". **Ask:** self-position the call components as a full-viewport modal (or ship the overlay CSS in the Standard-mode docs), and **define the `--cometchat-calls-*` vars** (or use `var(--x, 0px)` fallbacks). *Workaround:* `.cc-call-overlay{position:fixed;inset:0}` + force `.cometchat-ongoing-call` full-viewport + define both vars in `:root`.
+
+**C2 — Calling is a silent no-op until prereqs wired (com, dat).** `CometChatCallButtons` renders and looks functional but tapping does **nothing** — no screen, no error, no disabled state — until hidden prerequisites are in place: Flutter needs `enableCalls=true` + `CometChatUIKitCalls.init` + `navigatorKey`; RN needs an explicit `CometChatCalls.init` after UIKit init. **Ask:** co-locate the init prerequisite with the component; surface a disabled/error state when calling isn't wired.
+
+**C3 — Incoming-call overlay intercepts touches app-wide (del, dat).** The root-mounted `CometChatIncomingCall` overlay hit-tests the **whole screen**, so a lingering/stuck call makes the entire app unusable (worsened by stuck server-side sessions re-delivering on login). **Ask:** hit-test passthrough except the toast, and/or auto-reject stale calls. *Workaround:* `:has()`-gated overlay + `pointer-events:none` when idle.
+
+**C4 — Virtual devices ring but never connect media (com, del, dat).** Signaling works on emulators/simulators (caller "Calling…", callee rings), but the **WebRTC media session never establishes** — calls end "Missed"/"rejected". Audio-only fails too, so it's not arch/camera. The guide says "test on real devices" but never **warns** that virtual devices *falsely* show calling as broken. **Ask:** state that call verification requires **two physical devices**; add a troubleshooting entry.
+
+**C7 — iOS in-call UI hard-crashes on `CometChatCallsSDK 4.2.3` / iOS 26 (del; affects every native-iOS UC).** Placement, ringing, signaling and WebRTC media all work, but the instant the in-call session UI mounts the app dies: `EXC_BAD_ACCESS` (SIGSEGV, "possible pointer authentication failure") inside `CometChatCallsSDK → facebook::react::invokeInner` / `RCTNativeModule::invoke` — the **React Native runtime embedded in the Calls SDK** segfaults during a native-module invoke. Crashes identically on arm64 sim **and** x86_64/Rosetta. **FIX (one line):** pin `pod 'CometChatCallsSDK', '~> 5.0'` (resolves **5.0.1**) instead of `~> 4.1` (→ 4.2.3). Everything else identical — CometChatSDK 4.1.6, CometChatUIKitSwift 5.1.16, WebRTC 124.0.4, the I7 companion pods. No `post_install` RCTBridge hack, no custom-view `startSession(view:)` bypass needed. Verified on the same stack (marketplace + edtech, iOS 26.5 sim).
+**Honesty:** 5.0.1 **still embeds React Native** (RCTBridge present, ~2376 RN symbols) — this is *not* "5.x removed RN". The claim is strictly **empirical**: the 5.0.1 RN build doesn't trip the PAC/unwinder fault on iOS 26; 4.2.3 does (which also kills "iOS 26 PAC" as a general cause — the reference sim is 26.5). **Ask:** fix 4.2.3's iOS-26 crash, or document that `~> 5.0` is required for iOS-26 even against the 4.1.x chat SDK. **Codegen must pin `~> 5.0` for every native-iOS UC.** *Watch-outs after the bump:* only the **first** call per launch connects (kit state bug); and a separate SIGSEGV in `CometChatCallBubble.setupStyle` (`CallType.rawValue` on null) when rendering a group-call history bubble.
+
+**C5 — CallButtons + `CallNavigationContext` unusable with `MaterialApp.router`/go_router (com).** The kit presents the outgoing call via `Navigator.push(CallNavigationContext.navigatorKey.currentContext, …)`; that key is never owned by go_router, so the button silently no-ops. **Ask:** WARN that this combo (the de-facto Flutter routing standard) is a silent no-op, and ship the **raw-`cometchat_calls_sdk` + `rootNavigator:true` + explicit `CometChatCalls.loginWithAuthToken`** recipe as the supported path.
+
+**C6 — Calls-SDK lifecycle traps (com).** (a) Eager `CometChatUIKitCalls.init` at startup registers native telecom handlers that **hijack incoming calls and background/close** the app → init lazily on the call path when you own the incoming UI. (b) `CometChatCalls.getLoggedInUser()` returns a **`Future`**, so `if (getLoggedInUser() != null)` is always true → the required Calls login is skipped → `joinSession` fails `ERROR_AUTH_TOKEN`. (c) The Join-Session quick-start documents **no login prerequisite**. (d) The incoming-call event carries **only the caller uid** → rings as "Unknown Caller" unless resolved via `getUser`. **Ask:** document the async return, the explicit calls-login, and the name resolution; consider a sync `isLoggedIn`.
+
+## D. SDK packaging & docs/version drift
+
+**D1 — Ships broken artifacts (mkt, del).** RN UIKit ships **uncompiled `.tsx` with its own TS errors** (strict `tsc` fails on the library). iOS `CometChatUIKitSwift`/`CometChatSDK` xcframeworks ship a `.swiftinterface` importing **merged-but-unvended sub-modules** → un-consumable via CocoaPods+simulator on any compiler. **Ask:** ship compiled `.d.ts`; ship consumable sub-module interfaces / vend the sub-frameworks.
+
+**D2 — iOS companion modules referenced but not vended (del; also telehealth/edtech).** `CometChatSDK` imports `CometChatStarscream`, `CometChatUIKitSwift` imports `CometChatCardsSwift`, but the default pods reference them **without bundling/declaring** → `no such module`. **Fix (proven):** add both explicitly via CocoaPods (`CometChatStarscream` 1.0.2 via a local podspec off CometChat's CDN; `CometChatCardsSwift ~> 1.1`). **Ask:** pods should pull companions transitively.
+
+**D3 — iOS deployment-target drift (com).** Skills assert iOS **13.0** in ≥6 places, but `cometchat_calls_sdk` 5.0.3's podspec is **15.1** (pulled transitively by v6 chat-uikit → applies to *every* v6 app). At 13.0, `pod install` fails. **Ask:** state the true **15.1** floor.
+
+**D4 — RN UIKit version floor (dat).** `@cometchat/chat-uikit-react-native@5.3.10` pulls `cards-react-native@1.0.0` with a hard `peer react-native ">=0.76.0"`; on Expo SDK 51 (RN 0.74.5) install ERESOLVEs and the iOS build fails. **Ask:** state the **RN floor per UIKit version**; codegen must scaffold a compatible RN.
+
+## E. Web layout
+
+**E1 — Message list won't scroll (mkt, dat).** The kit injects a `.cometchat` wrapper that grows unbounded unless the host bounds its height. **Ask:** ship the bounded-height wrapper in the mount recipe. *Workaround:* `.cc-msg-list > .cometchat{height:100%;min-height:0;overflow:hidden}`.
+
+## F. Mobile native setup
+
+**F1 — Release cleartext + INTERNET (com, dat).** A RELEASE build against a local HTTP backend needs `usesCleartextTraffic` + network-security-config **AND** `INTERNET` in the **MAIN** manifest (injected only into DEBUG by default) + iOS ATS. **Ask:** document these together.
+
+**F2 — iOS RN Podfile `use_modular_headers!` (mkt).** The Swift RN UI-kit pod fails `pod install` because deps don't define modules. **Ask:** add it via a config plugin that survives `expo prebuild`.
+
+---
+
+## Scope notes
+- **Codegen misses** (agent wrote wrong code against a *correct* skill) and **harness/env** issues live in `pipeline-state/pipeline-notes/<slug>.md`, not here.
+- **Retracted** items (checked → not a real CometChat gap) are marked in the per-UC files and not counted.
+- Tally + lint: `pipeline/lib/gaps.py` (`rebuild()` / `lint()`); rollup: `MASTER_GAPS.md`.
