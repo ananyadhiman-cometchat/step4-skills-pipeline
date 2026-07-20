@@ -69,3 +69,22 @@ codegen — recorded here (not in `gaps/fin.md`) so the skills ledger stays hone
 ### auto-recorded verify triage (fin)
 - [setup] AI moderation not observed — no moderation transform observed (extension likely not enabled in dashboard) (enable the moderation/data-masking extension in the CometChat dashboard)
 - [env] web CALL screens unrenderable headless — two-party WebRTC media can't be negotiated in an automated browser (caller stuck at 'Calling…', callee blank): web-call(fullscreen,controls), callee-ringing-voice(not_corner_toast), callee-ongoing-voice(no_app_chrome), callee-ringing-video(not_corner_toast), callee-ongoing-video(no_app_chrome). Call CONNECTION proven by machine evidence (callConnect/twoParty) + native↔native live matrix; these shots are ADVISORY. See gallery /Users/admin/Desktop/automate/runs/fin/_demo/shot-review.html
+
+## Native↔web call matrix was never actually exercised (harness)
+
+<!-- harness:twoparty-mobile-mkt-hardcoded -->
+- **`note:`** [harness] `pipeline/e2e/twoparty_mobile.py` hardcoded the web peer's working directory to
+  `runs/mkt/web` (`web_proc`). On every use case except mkt that path does not exist, so the runner
+  raised `FileNotFoundError` BEFORE placing a call — and `run_twoparty_mobile` swallowed it as
+  `{"error": "no verdict json", "callConnected": False}`. The demo call matrix therefore reported
+  `connected=False` for android↔web and ios↔web on every non-mkt use case, which reads as
+  "native calling is broken" when in fact nothing was ever dialled.
+  - _also_: `reset_app()` force-stopped `com.mkt.mobile` rather than the use case's own package, so
+    the real app kept running with stale call state between legs.
+  - _blast radius_: every native-mobile use case (del, fin, cre, rea, evt). Any past run that recorded
+    a failed mobile call leg needs re-checking — the failure may never have been real.
+  - _fix_: `web_proc(..., slug)` uses `runs/<slug>/web`; `reset_app(platform, app_id)` stops the real app.
+  - _status after fix_: the runner now runs. Real signal on fin android↔web voice —
+    `mobileLogin=true, webCaller.callStarted=true, mobileAccept=false, serverAnswered=false`,
+    i.e. the web peer places the call but the Android client never renders the incoming widget.
+    Root cause NOT yet isolated; native calling remains UNPROVEN on fin.

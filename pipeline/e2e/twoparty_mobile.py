@@ -53,12 +53,15 @@ def _device_flag(platform: str) -> list[str]:
     return []
 
 
-def reset_app(platform: str) -> None:
-    """Force-stop the app so a prior call/session can't bleed into the next leg's clean launch."""
+def reset_app(platform: str, app_id: str = "com.mkt.mobile") -> None:
+    """Force-stop the app so a prior call/session can't bleed into the next leg's clean launch.
+
+    app_id must be THIS use case's package/bundle — hardcoding com.mkt.mobile force-stopped an app
+    that isn't installed, leaving the real one running with stale call state between legs."""
     if platform == "android":
-        subprocess.run([ADB, "shell", "am", "force-stop", "com.mkt.mobile"], capture_output=True)
+        subprocess.run([ADB, "shell", "am", "force-stop", app_id], capture_output=True)
     else:
-        subprocess.run(["xcrun", "simctl", "terminate", "booted", "com.mkt.mobile"], capture_output=True)
+        subprocess.run(["xcrun", "simctl", "terminate", "booted", app_id], capture_output=True)
     time.sleep(3)
 
 
@@ -78,9 +81,14 @@ def pull_shot(platform: str, maestro_name: str, dest: str) -> bool:
     return False
 
 
-def web_proc(script: str, env: dict):
-    """Spawn a web playwright script (in web/ so @playwright/test resolves). Returns Popen."""
-    web = (HERE.parent.parent / "runs" / "mkt" / "web")
+def web_proc(script: str, env: dict, slug: str = "mkt"):
+    """Spawn a web playwright script (in web/ so @playwright/test resolves). Returns Popen.
+
+    The web dir MUST be this use case's own. It was hardcoded to runs/mkt/web, so on every other use
+    case the copy target did not exist and this raised FileNotFoundError before a single call was
+    placed — the mobile call matrix then reported connected=False for every leg, which reads as
+    "native calling is broken" when nothing was ever dialled."""
+    web = (HERE.parent.parent / "runs" / slug / "web")
     dst = web / f"_{Path(script).stem}_run.mjs"
     dst.write_text((HERE / script).read_text())
     p = subprocess.Popen(["node", str(dst)], cwd=str(web), text=True,
@@ -107,7 +115,7 @@ def web_calls_mobile(platform, call_type, web_url, shot_dir, env_file="", slug="
     web_email = web_email or WEB_EMAIL
     password = password or WEB_PW
     tag = f"{platform}-{call_type}"
-    reset_app(platform)   # clean slate — no lingering call from a prior leg
+    reset_app(platform, app_id)   # clean slate — no lingering call from a prior leg
     # 1. mobile logs in → CallSurfaces arms the incoming listener at app root
     login = maestro(platform, "login_msgs.flow.yaml",
                     {"APP_ID": app_id, "EMAIL": mobile_email, "PASSWORD": password, "SUBMIT": submit, "HOME": home})
@@ -118,7 +126,7 @@ def web_calls_mobile(platform, call_type, web_url, shot_dir, env_file="", slug="
     time.sleep(15 if platform == "ios" else 5)
     # 2. spawn web caller (the web party rings the mobile party, holds the line)
     since = int(time.time())   # server-answered floor
-    p, dst = web_proc("webcaller.web.mjs", {
+    p, dst = web_proc("webcaller.web.mjs", slug=slug, env={
         "WEB_URL": web_url, "CALL_TYPE": call_type, "CALLER_EMAIL": web_email,
         "E2E_PASSWORD": password, "HOLD_MS": "55000", "SHOT_DIR": shot_dir, "TAG": tag})
     time.sleep(2)
