@@ -88,6 +88,17 @@ def render_build(settings, uc: dict, comp: dict) -> str:
 def render_integrate(settings, uc: dict, comp: dict) -> str:
     vue_note = ("NOTE: this Vue web slice has NO cometchat-vue skill — expect no skill to trigger; "
                 "record 'missedTrigger: vue-web' in the gap log (this is the deliberate gap-probe). "
+                "STRATEGY (there is no Vue UI Kit — do NOT hand-roll chat/call UI on the raw SDK): mount the "
+                "CometChat **React** UI Kit + Calls SDK as a React ISLAND inside Vue. Render a React root "
+                "(ReactDOM.createRoot into a Vue component's DOM ref; unmount in onBeforeUnmount) for the "
+                "conversation/message UI AND — this is the part that MUST be React-wrapped — the call "
+                "surfaces (CometChatIncomingCall / CometChatOutgoingCall / CometChatOngoingCall + "
+                "CometChatCallButtons). Initialize CometChatUIKit ONCE globally (guard against Vite HMR "
+                "double-init); bridge auth-token + logged-in user into the island via props. Follow "
+                "cometchat-react + cometchat-react-calls. Apply the known call-overlay CSS (full-viewport "
+                "fixed overlay + define the --cometchat-calls-* height vars) so the ring/ongoing surfaces "
+                "self-position. Still record the vue-web missedTrigger above — the gap is real even though "
+                "the React-island workaround makes it functional. "
                 if "vue-GAP" in uc.get("skills", []) and comp["kind"] == "web" else "")
     return _tmpl("integrate.md.tmpl").format(
         name=uc["name"], slug=uc["slug"], comp=comp["name"], kind=comp["kind"],

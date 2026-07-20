@@ -296,6 +296,13 @@ def install_launch_shot_android(apk: str, out_png: str, pkg=None) -> bool:
             subprocess.run([ADB, "exec-out", "screencap", "-p"], stdout=f)
         fg = _fg_pkg_android()
         if fg == pkg and os.path.getsize(out_png) > 60000:
+            # Foreground is ours — but this may still be the SPLASH, whose window also belongs to our
+            # package, so the check above cannot tell them apart. Let the first real frame settle and
+            # RE-capture; otherwise the demo gallery ships a screenshot of the launcher splash icon
+            # (which Claude-vision then correctly refutes as "not the app rendered").
+            time.sleep(7)
+            with open(out_png, "wb") as f:
+                subprocess.run([ADB, "exec-out", "screencap", "-p"], stdout=f)
             ok = True; break
         time.sleep(6)
     if not ok:
@@ -310,6 +317,46 @@ def boot_ios(device=None) -> bool:
     subprocess.run(["open", "-a", "Simulator"], capture_output=True)
     subprocess.run(["xcrun", "simctl", "bootstatus", device], capture_output=True, timeout=180)
     return True
+
+
+_DEV_DIR: object = False   # False = not yet computed; None = leave xcode-select alone
+
+
+def select_developer_dir() -> str | None:
+    """Choose an Xcode whose iOS *Simulator* SDK has a matching INSTALLED runtime; return its
+    DEVELOPER_DIR (or None to leave the default alone). Result is cached per process.
+
+    macOS commonly carries two Xcodes side by side, and `xcode-select` can easily point at the wrong
+    one: here it pointed at Xcode 16.4, whose only iOS SDK is 18.5, while the ONLY installed simulator
+    runtime was iOS 26.3 (Xcode 26.2's). xcodebuild then reports ZERO eligible simulator destinations
+    and every iOS build dies "Found no destinations for the scheme '<x>'" (exit 70) BEFORE compiling a
+    line — which reads like a broken project but is pure toolchain misconfiguration. Matching the
+    simulator-SDK MAJOR against an available runtime major picks the usable Xcode deterministically,
+    rather than trusting xcode-select or blindly guessing 'newest'."""
+    global _DEV_DIR
+    if _DEV_DIR is not False:
+        return _DEV_DIR                                     # type: ignore[return-value]
+    _DEV_DIR = None
+    if os.environ.get("DEVELOPER_DIR"):                     # explicit operator choice always wins
+        _DEV_DIR = os.environ["DEVELOPER_DIR"]
+        return _DEV_DIR                                     # type: ignore[return-value]
+    code, out = _run(["xcrun", "simctl", "list", "runtimes"])
+    majors = set()
+    for line in (out or "").splitlines() if code == 0 else []:
+        m = re.match(r"\s*iOS (\d+)\.", line)
+        if m and "unavailable" not in line.lower():
+            majors.add(m.group(1))
+    if not majors:
+        return None                                          # no runtimes → nothing to match; don't meddle
+    for dev in sorted((p / "Contents" / "Developer" for p in Path("/Applications").glob("Xcode*.app")),
+                      reverse=True):                         # newest-named first, but SDK match decides
+        if not dev.is_dir():
+            continue
+        c, o = _run(["xcodebuild", "-showsdks"], env={"DEVELOPER_DIR": str(dev)})
+        if c == 0 and {m.group(1) for m in re.finditer(r"-sdk iphonesimulator(\d+)\.", o)} & majors:
+            _DEV_DIR = str(dev)
+            break
+    return _DEV_DIR                                          # type: ignore[return-value]
 
 
 def build_ios(mobile_dir: Path, api_url: str) -> dict:
@@ -355,12 +402,31 @@ def _resolve_ios_device(preferred: str | None = None) -> str:
 
 
 def install_launch_shot_ios(app: str, out_png: str, bundle=None, device=None) -> bool:
+    """Install + launch the built .app on a simulator and screenshot it.
+
+    Success is the INSTALL and LAUNCH actually succeeding — NOT merely capturing a screenshot. The old
+    check (`screenshot > 40000 bytes`) passed on the simulator HOME SCREEN, so an app that never
+    installed scored ok=True and only Claude-vision caught it. Worse, the bundle fell back to a
+    hardcoded "com.mkt.mobile" (a different use case's id), which made every launch on a project whose
+    plist lacked CFBundleIdentifier target the wrong app entirely."""
     device = _resolve_ios_device(device)                          # never trust a hardcoded sim name
-    bundle = bundle or _app_bundle_id(app) or "com.mkt.mobile"   # derive the REAL bundle from the .app
+    bundle = bundle or _app_bundle_id(app)                        # derive the REAL bundle from the .app
+    if not bundle:
+        print(f"  ios install: NO bundle id — {Path(app).name}/Info.plist has no CFBundleIdentifier and "
+              f"no id was supplied; the .app is uninstallable (see selfheal.ensure_ios_infoplist_keys)")
+        return False
     subprocess.run(["xcrun", "simctl", "terminate", device, bundle], capture_output=True)
     subprocess.run(["xcrun", "simctl", "uninstall", device, bundle], capture_output=True)  # clean install
-    subprocess.run(["xcrun", "simctl", "install", device, app], capture_output=True)
+    ins = subprocess.run(["xcrun", "simctl", "install", device, app], capture_output=True, text=True)
+    if ins.returncode != 0:
+        print(f"  ios install FAILED ({ins.returncode}): {(ins.stderr or ins.stdout or '').strip()[:220]}")
+        return False
     r = subprocess.run(["xcrun", "simctl", "launch", device, bundle], capture_output=True, text=True)
+    # `simctl launch` exits 0 even when the launch fails, so match the error text too.
+    out = (r.stdout or "") + (r.stderr or "")
+    if r.returncode != 0 or "failed to launch" in out.lower() or "error was encountered" in out.lower():
+        print(f"  ios launch FAILED for {bundle}: {out.strip()[:220]}")
+        return False
     time.sleep(14)
     subprocess.run(["xcrun", "simctl", "io", device, "screenshot", out_png], capture_output=True)
     # A launched-then-crashed app (or a debug assertion red screen) still produces a screenshot — the

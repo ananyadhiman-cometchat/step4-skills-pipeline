@@ -1,21 +1,70 @@
-# Log in via a DEMO-ACCOUNT quick-fill button (visible text — works on Flutter where Maestro can't
-# see widget Keys) then submit, and screenshot the LOGGED-IN home. Proves backend connectivity.
-# Params: APP_ID, ROLE (demo button label), SUBMIT.
+# Log in as a REAL account and screenshot the LOGGED-IN home. Proves backend connectivity.
+# Params: APP_ID, EMAIL, PASSWORD, ROLE (demo-button label — fallback only), SUBMIT.
+#
+# PRIMARY path types EMAIL/PASSWORD into the mandated test ids (email-input / password-input /
+# login-submit) that the build contract requires every client to expose. The previous version did NO
+# typing at all — it only tapped a demo-account button labelled ${ROLE} (default "Member"). When a use
+# case labelled its buttons differently (fin: Customer/Agent/Manager/Admin) that tap silently no-op'd,
+# the fields stayed EMPTY, Sign In stayed DISABLED, and the gate failed on a 25s timeout that read as
+# "the app cannot sign in" — on an app that was perfectly healthy. It also meant the gate signed in as
+# whatever the demo button pre-filled, NOT the account the caller actually asked for.
+#
+# FALLBACK keeps the demo-button tap for Flutter/CanvasKit, where Maestro cannot see widget ids at all.
 appId: ${APP_ID}
 ---
 - launchApp: { clearState: true }
 - tapOn: { text: "Don't Show Again", optional: true }
 - tapOn: { text: "OK", optional: true }
-# tap a demo-account button (fills creds) — then WAIT for the fields to populate before submitting
-- tapOn: { text: "${ROLE}", optional: true }
-- waitForAnimationToEnd: { timeout: 3000 }
-# fallback for apps with no demo buttons: focus the email field (no-op if already filled)
-- tapOn: { id: "email-input", optional: true }
-- waitForAnimationToEnd: { timeout: 1500 }
+# --- PRIMARY: real credentials via the mandated ids. eraseText keeps it deterministic even if
+#     something already pre-filled the fields. ---
+- runFlow:
+    when:
+      visible:
+        id: "email-input"
+    commands:
+      - tapOn: { id: "email-input" }
+      - eraseText
+      - inputText: ${EMAIL}
+      - tapOn: { id: "password-input" }
+      - eraseText
+      - inputText: ${PASSWORD}
+      # Dismiss the keyboard so it cannot cover the submit button. `hideKeyboard` works on Android but
+      # is unreliable on iOS (it tries to tap a non-interactive element and errors out), so on iOS tap a
+      # neutral area near the top of the form instead.
+      - runFlow:
+          when:
+            platform: Android
+          commands:
+            - hideKeyboard
+      - runFlow:
+          when:
+            platform: iOS
+          commands:
+            - tapOn:
+                point: "50%,25%"
+# --- FALLBACK: ids not visible (Flutter) → demo-account quick-fill button ---
+- runFlow:
+    when:
+      notVisible:
+        id: "email-input"
+    commands:
+      - tapOn: { text: "${ROLE}", optional: true }
+      - waitForAnimationToEnd: { timeout: 3000 }
 # submit (prefer the mandated testID, else the visible label)
 - tapOn: { id: "login-submit", optional: true }
 - tapOn: { text: "${SUBMIT}", optional: true }
 # logged in = the Sign In control is gone
 - extendedWaitUntil: { notVisible: { text: "${SUBMIT}" }, timeout: 25000 }
 - waitForAnimationToEnd: { timeout: 6000 }
+# FALSE-PASS GUARD: while the login request is in flight the submit button is replaced by a spinner, so
+# the wait above passes even when the request then FAILS and the form comes back. fin's iOS login failed
+# to decode its response ("The data couldn't be read because it is missing") and still reported a green
+# flow — only the screenshot showed the error. Re-assert AFTER the UI settles: if the login form
+# returned, we are NOT logged in. Text-based so it works on Flutter too, where ids are invisible.
+- assertNotVisible: { text: "${SUBMIT}" }
+# iOS pops a system "Save Password?" sheet AFTER a credential submit (the dismissals at the top of this
+# flow run too early to catch it). Left up it covers the logged-in home in the CP1 gallery screenshot.
+- tapOn: { text: "Not Now", optional: true }
+- tapOn: { text: "Never", optional: true }
+- waitForAnimationToEnd: { timeout: 2000 }
 - takeScreenshot: /tmp/mobile-loggedin

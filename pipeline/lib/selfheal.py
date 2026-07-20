@@ -350,6 +350,86 @@ def _fix_ios_companion_pods(ctx) -> tuple[bool, str]:
     return True, f"added CometChatStarscream(podspec)+CometChatCardsSwift to {patched} Podfile(s)"
 
 
+def _fix_ios_calls_sdk_version(ctx) -> tuple[bool, str]:
+    """The iOS Calls SDK on the 4.x line (what `~> 4.1` resolves to — 4.2.3) HARD-CRASHES the instant the
+    in-call session UI mounts on an iOS 26 simulator: EXC_BAD_ACCESS (SIGSEGV, "possible pointer
+    authentication failure") inside CometChatCallsSDK → facebook::react::invokeInner — the React-Native
+    bridge embedded in the Calls SDK dying in the unwinder. Placement/ringing/signaling and WebRTC media all
+    work; ONLY the session screen dies (white screen → crash). Crashes identically on arm64 sim and
+    x86_64-under-Rosetta, so it is not arch alone. FIX: pin `~> 5.0` (→ 5.0.1), which stays compatible with
+    CometChatSDK 4.1.6 / CometChatUIKitSwift 5.1.16 — the widely-held "4.2.3 is the newest CallsSDK
+    compatible with the 4.1.x line" belief is FALSE. HONESTY: 5.0.1 STILL embeds React Native (RCTBridge
+    present); this is an EMPIRICAL fix (5.0.1's RN build doesn't trip the PAC/unwinder fault on iOS 26,
+    4.2.3 does), NOT "5.x removed RN". Runs BEFORE `pod install` so no iOS use case ever hits the crash."""
+    pods = _ios_companion_podfiles(ctx)
+    if not pods:
+        return False, "no CometChatUIKitSwift Podfile found"
+    patched = 0
+    for pf in pods:
+        t = pf.read_text()
+        # Only rewrite an explicit 4.x pin — absent/unpinned already resolves to the 5.x line.
+        new = re.sub(r"(pod\s+['\"]CometChatCallsSDK['\"]\s*,\s*)['\"](?:~>\s*)?4[\d.]*['\"]",
+                     r"\1'~> 5.0'", t)
+        if new != t:
+            pf.write_text(new)
+            patched += 1
+    if not patched:
+        return False, "CometChatCallsSDK not pinned to 4.x (nothing to bump)"
+    return True, f"pinned CometChatCallsSDK '~> 5.0' (was 4.x) in {patched} Podfile(s)"
+
+
+# The bundle keys Xcode auto-injects ONLY when GENERATE_INFOPLIST_FILE=YES. A project that points
+# INFOPLIST_FILE at a hand-written plist gets none of them.
+_IOS_PLIST_REQUIRED = {
+    "CFBundleIdentifier": "$(PRODUCT_BUNDLE_IDENTIFIER)",
+    "CFBundleExecutable": "$(EXECUTABLE_NAME)",
+    "CFBundleName": "$(PRODUCT_NAME)",
+    "CFBundlePackageType": "APPL",
+    "CFBundleInfoDictionaryVersion": "6.0",
+    "CFBundleShortVersionString": "1.0",
+    "CFBundleVersion": "1",
+    "CFBundleDevelopmentRegion": "$(DEVELOPMENT_LANGUAGE)",
+}
+
+
+def ensure_ios_infoplist_keys(comp_dir) -> list[dict]:
+    """Guarantee the built .app carries a bundle identifier.
+
+    A native-iOS project that sets a CUSTOM `INFOPLIST_FILE` WITHOUT `GENERATE_INFOPLIST_FILE = YES`
+    gets no auto-injected bundle keys, so the built .app ships with NO CFBundleIdentifier and is
+    UNINSTALLABLE — `simctl install` fails "Missing bundle ID" (IXErrorDomain code 13) on every
+    simulator and device. The build still exits 0, so this passes the compile gate and only shows up as
+    a home-screen screenshot at demo time. Injects the keys Xcode would have generated, using the same
+    $(VAR) macros so PRODUCT_BUNDLE_IDENTIFIER stays the single source of truth."""
+    import plistlib
+    d = Path(comp_dir)
+    proj = next(iter(sorted(d.glob("*.xcodeproj"))), None)
+    if proj is None:
+        return []
+    pbx = (proj / "project.pbxproj")
+    txt = pbx.read_text() if pbx.exists() else ""
+    if re.search(r"GENERATE_INFOPLIST_FILE\s*=\s*YES", txt):
+        return []                                   # Xcode generates them; nothing to do
+    m = re.search(r"INFOPLIST_FILE\s*=\s*\"?([^\";\n]+)\"?\s*;", txt)
+    if not m:
+        return []
+    plist = d / m.group(1).strip()
+    if not plist.exists():
+        return []
+    try:
+        data = plistlib.loads(plist.read_bytes())
+    except Exception:
+        return []
+    missing = {k: v for k, v in _IOS_PLIST_REQUIRED.items() if k not in data}
+    if not missing:
+        return []
+    data.update(missing)
+    plist.write_bytes(plistlib.dumps(data))
+    return [{"rule": "ios-infoplist-bundle-keys", "owner": "harness",
+             "detail": f"injected {sorted(missing)} into {plist.name} "
+                       f"(custom INFOPLIST_FILE without GENERATE_INFOPLIST_FILE)"}]
+
+
 def ensure_ios_companion_pods(comp_dir, slug: str | None = None) -> list[dict]:
     """Proactive entry point the iOS build gate calls BEFORE `pod install`. Runs the I7 companion-pods
     guard for a native-iOS component and records the gap (self-heal witnesses it). Returns applied fixes."""
@@ -578,9 +658,54 @@ def _fix_compose_env(ctx) -> tuple[bool, str]:
     return True, "backend env → ${COMETCHAT_*} refs (values in git-ignored .env; no secrets in tracked compose)"
 
 
+# The standard Compose experimental markers. `testTagsAsResourceId` (ExperimentalComposeUiApi) is the one
+# that actually bites, and the HARNESS ITSELF induces it: the build prompt requires it so Maestro can target
+# `id:` in the mobile login flow — so this failure is structural on every Compose use case, not bad luck.
+_COMPOSE_OPTINS = ("androidx.compose.ui.ExperimentalComposeUiApi",
+                   "androidx.compose.material3.ExperimentalMaterial3Api",
+                   "androidx.compose.foundation.ExperimentalFoundationApi",
+                   "androidx.compose.animation.ExperimentalAnimationApi")
+
+
+def _fix_kotlin_optin(ctx) -> tuple[bool, str]:
+    """Kotlin fails the build ('This API is experimental and is likely to change in the future') when
+    codegen calls an @Experimental* Compose API without @OptIn. Rather than chase every call site, add
+    the opt-in markers as MODULE compiler args — which is what real Compose apps do — so the whole
+    module compiles regardless of which experimental API codegen reached for."""
+    app = Path(ctx.get("comp_dir") or ctx.get("mobile_dir") or "")
+    gradle = next((c for c in (app / "app" / "build.gradle.kts", app / "app" / "build.gradle",
+                               app / "build.gradle.kts", app / "build.gradle") if c.exists()), None)
+    if gradle is None:
+        return False, "no module build.gradle(.kts) found"
+    txt = gradle.read_text()
+    if "-opt-in=androidx.compose" in txt:
+        return False, "compose opt-in compiler args already present"
+    kts = gradle.suffix == ".kts"
+    line = ("        freeCompilerArgs += listOf(" + ", ".join(f'"-opt-in={m}"' for m in _COMPOSE_OPTINS) + ")"
+            if kts else
+            "        freeCompilerArgs += [" + ", ".join(f"'-opt-in={m}'" for m in _COMPOSE_OPTINS) + "]")
+    m = re.search(r"^\s*kotlinOptions\s*\{", txt, re.M)
+    if m:
+        txt = txt[:m.end()] + "\n" + line + txt[m.end():]
+    else:  # no kotlinOptions block yet → open one inside android { }
+        m2 = re.search(r"^\s*android\s*\{", txt, re.M)
+        if not m2:
+            return False, "no kotlinOptions or android { } block to extend"
+        txt = txt[:m2.end()] + "\n    kotlinOptions {\n" + line + "\n    }" + txt[m2.end():]
+    gradle.write_text(txt)
+    return True, f"compose opt-in compiler args → {gradle.name}"
+
+
 # ---------- rule registry ----------
 # phase: 'pre' = proactive before build · 'on_fail' = reactive on a matching failure
 RULES = [
+    {"id": "kotlin-optin", "phase": "on_fail", "families": {"android-native", "rn"},
+     "sig": r"This API is experimental and is likely to change|requires opt-in|Opt-in requirement"
+            r"|Experimental(ComposeUi|Material3|Foundation|Animation)Api", "fix": _fix_kotlin_optin,
+     "owner": "harness",
+     "note": "fin: Compose codegen used testTagsAsResourceId (@ExperimentalComposeUiApi) with no @OptIn → "
+             "compileDebugKotlin fails. The harness REQUIRES that property (Maestro id: targeting), so it "
+             "owns the fix; not a CometChat skills gap."},
     {"id": "cleartext-http", "phase": "pre", "families": {"rn", "flutter"},
      "sig": r"CLEARTEXT|ERR_CLEARTEXT|App Transport Security|NSAllowsArbitraryLoads", "fix": _fix_cleartext,
      "note": "UC1: release builds block cleartext to the local HTTP backend",
@@ -644,6 +769,31 @@ RULES = [
             "podspec pointing at the CDN xcframework (library.cometchat.io/ios/v4.0/xcode15/"
             "CometChatStarscream_1_0_2.xcframework.zip) + CometChatCardsSwift '~> 1.1'. This is NOT an Xcode/Swift-version "
             "issue and NOT fixable by switching to SPM (empty stubs link but crash at launch: Symbol not found WebSocketEvent)."},
+    {"id": "ios-calls-sdk-version", "phase": "pre", "families": {"ios-native", "flutter", "rn"},
+     "sig": r"facebook::react::invokeInner|RCTNativeModule::invoke|possible pointer authentication failure|"
+            r"EXC_BAD_ACCESS.*CometChatCallsSDK|CometChatCallsSDK.*(SIGSEGV|crash)",
+     "fix": _fix_ios_calls_sdk_version, "owner": "sdk",
+     "note": "iOS CallsSDK 4.x crashes on in-call UI mount (iOS 26 sim) — pin ~> 5.0",
+     "gap": "The CometChat iOS Calls SDK on the 4.x line (`~> 4.1` → 4.2.3) HARD-CRASHES the moment the in-call "
+            "session UI mounts on an iOS 26 simulator: EXC_BAD_ACCESS (SIGSEGV, \"possible pointer authentication "
+            "failure\") inside CometChatCallsSDK → facebook::react::invokeInner — the React-Native bridge embedded "
+            "in the Calls SDK dying in the unwinder during a native-module invoke. Call placement, ringing, "
+            "signaling and WebRTC media ALL work (peer holds a live connected call); only the session screen dies "
+            "(white screen ~1s → crash). Reproduces identically on the arm64 simulator AND x86_64-under-Rosetta, so "
+            "it is not an arm64-PAC issue alone, and it is entirely inside SDK frames (no app code on the stack). "
+            "FIX: pin `pod 'CometChatCallsSDK', '~> 5.0'` (resolves 5.0.1) — it stays compatible with CometChatSDK "
+            "4.1.6 / CometChatUIKitSwift 5.1.16 (+ WebRTC 124.0.4 + the I7 companion pods); CocoaPods resolves it "
+            "cleanly and the kit's in-call UI renders. No post_install/RCTBridge workaround and no custom-view "
+            "startSession(callToken:callSetting:view:) bypass is required. The commonly-stated blocker \"4.2.3 is "
+            "the newest CallsSDK compatible with the CometChatSDK 4.1.x line\" is FALSE. IMPORTANT — do not ship the "
+            "wrong reason: 5.0.1 STILL embeds React Native (RCTBridge present, ~2376 RN symbols), so \"5.x removed "
+            "RN\" is untrue; the fix is strictly EMPIRICAL (the 5.0.1 RN build does not trip the PAC/unwinder fault "
+            "on iOS 26, 4.2.3 does — which also rules out \"iOS 26 PAC\" as a general cause, since a newer 26.5 sim "
+            "renders fine on 5.0.1). CometChat should fix the 4.2.3 crash or document that the 5.0.x Calls line is "
+            "REQUIRED for iOS 26, even against the 4.1.x chat SDK. Affects every native-iOS use case. Watch-outs "
+            "after the bump: (a) only the FIRST call per launch connects — subsequent calls never transition to the "
+            "ongoing screen (kit state bug); (b) a separate SIGSEGV in CometChatCallBubble.setupStyle (CallType "
+            "rawValue on null) when rendering a group-call history bubble."},
     {"id": "expo-android-splash-color", "phase": "pre", "families": {"rn"},
      "sig": r"resource color/splashscreen_background not found|splashscreen_background", "fix": _fix_expo_android_splash,
      "note": "RN/Expo prebuild references @color/splashscreen_background in splashscreen.xml but omits it from "

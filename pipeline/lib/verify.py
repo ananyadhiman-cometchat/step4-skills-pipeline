@@ -105,13 +105,28 @@ def build_gate(kind: str, comp_dir: Path, env: dict | None = None) -> dict:
     return {"kind": kind, "buildExitCode": code, "outputTail": _tail(out)}
 
 
+# REQUIRED on Xcode 16/26: with only `-sdk iphonesimulator` and no destination, xcodebuild aborts
+# "Found no destinations for the scheme '<x>'" (exit 70) before building anything. The GENERIC simulator
+# destination needs no booted sim. mobile.build_ios already passed this; the compile gate never did.
+_IOS_DEST = ("-destination", "generic/platform=iOS Simulator")
+
+
 def _ios_gate(d: Path, env: dict | None = None) -> tuple[int, str]:
     """iOS compile gate. When the app uses CocoaPods (a Podfile adding pods — e.g. CometChatUIKitSwift),
     the integrated code `import`s a pod module that ONLY exists after `pod install`, and the build must
     target the CocoaPods-generated `.xcworkspace`, not the bare `.xcodeproj`. The demo/providers paths
     (mobile.py / providers.py) already do this; the integrate/build compile gate did not — so every
     pod-based iOS integration failed here with "no such module 'CometChatUIKitSwift'". Mirror them."""
-    scheme = d.name
+    # Bundle-id guard (proactive): a custom INFOPLIST_FILE without GENERATE_INFOPLIST_FILE yields an .app
+    # with no CFBundleIdentifier — compiles clean, but `simctl install` rejects it ("Missing bundle ID"),
+    # so the demo silently screenshots the simulator home screen instead of the app.
+    try:
+        from lib import selfheal
+        _ip = selfheal.ensure_ios_infoplist_keys(d)
+        if _ip:
+            print(f"  ios build gate: Info.plist bundle-keys guard → {[x['rule'] for x in _ip]}")
+    except Exception as _e:
+        print(f"  ios build gate: Info.plist guard skipped ({_e})")
     if (d / "Podfile").exists():
         # I7 guard (proactive): CometChat's iOS pods reference CometChatStarscream / CometChatCardsSwift
         # but don't bundle/declare them, so a by-the-book `pod install` yields a target that fails to
@@ -129,9 +144,34 @@ def _ios_gate(d: Path, env: dict | None = None) -> tuple[int, str]:
         ws = next(iter(d.glob("*.xcworkspace")), None)
         if ws is None:  # pod install did not produce a workspace → surface its output, don't build the bare project
             return (pc or 1), "pod install did not produce an .xcworkspace:\n" + po
-        return _run(["xcodebuild", "-workspace", ws.name, "-scheme", scheme,
-                     "-sdk", "iphonesimulator", "build"], cwd=str(d), env=env)
-    return _run(["xcodebuild", "-scheme", scheme, "-sdk", "iphonesimulator", "build"], cwd=str(d), env=env)
+        return _run(["xcodebuild", "-workspace", ws.name, "-scheme", _ios_scheme(d, ws, env),
+                     "-sdk", "iphonesimulator", *_IOS_DEST, "build"], cwd=str(d), env=env)
+    return _run(["xcodebuild", "-scheme", _ios_scheme(d, None, env),
+                 "-sdk", "iphonesimulator", *_IOS_DEST, "build"], cwd=str(d), env=env)
+
+
+def _ios_scheme(d: Path, ws: Path | None = None, env: dict | None = None) -> str:
+    """Resolve the Xcode SCHEME to build. The component dir is named for its KIND ("ios"), but codegen
+    names the project after the APP (FinSupport.xcodeproj → scheme "FinSupport"), so assuming the dir
+    name fails EVERY native-iOS use case with: 'does not contain a scheme named "ios"' (exit 65, before
+    a single line is compiled). Ask xcodebuild for the authoritative scheme list and prefer, in order:
+    the dir name (layouts that genuinely match), the workspace/project stem, then the first scheme."""
+    proj = next(iter(d.glob("*.xcodeproj")), None)
+    target = ["-workspace", ws.name] if ws else (["-project", proj.name] if proj else [])
+    schemes: list[str] = []
+    try:
+        code, out = _run(["xcodebuild", "-list", "-json", *target], cwd=str(d), env=env)
+        if code == 0 and "{" in out:
+            info = json.loads(out[out.index("{"):out.rindex("}") + 1])
+            schemes = (info.get("workspace") or info.get("project") or {}).get("schemes") or []
+    except Exception:
+        schemes = []
+    for cand in (d.name, (ws.stem if ws else None), (proj.stem if proj else None)):
+        if cand and cand in schemes:
+            return cand
+    if schemes:
+        return schemes[0]
+    return (ws or proj).stem if (ws or proj) else d.name   # -list unavailable → best on-disk guess
 
 
 def _backend_build(d: Path, env: dict | None = None) -> tuple[int, str]:

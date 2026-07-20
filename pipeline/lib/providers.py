@@ -16,7 +16,7 @@ Native (Compose/Kotlin/Swift) recipes are written against the standard toolchain
 the first native use case (UC3/5/6/8/10) the same way RN hardened on UC1 and Flutter on UC2.
 """
 from __future__ import annotations
-import os, subprocess, time
+import os, re, subprocess, time
 from pathlib import Path
 from lib import mobile, selfheal
 
@@ -164,6 +164,10 @@ class IOSNativeProvider:
 
     def demo(self, ctx) -> dict:
         app = ctx["app_dir"]; demo = ctx["demo_dir"]; _guards(ctx)
+        # Without CFBundleIdentifier the .app cannot be installed at all ("Missing bundle ID") even
+        # though it compiled — run the guard here too, since demo builds independently of the gate.
+        for f in selfheal.ensure_ios_infoplist_keys(app):
+            print(f"  ios demo: Info.plist bundle-keys guard → {f['rule']} ({f['detail']})")
         ws = next(iter(app.glob("*.xcworkspace")), None) or next(iter(app.glob("*.xcodeproj")), None)
         flag = "-workspace" if ws and ws.suffix == ".xcworkspace" else "-project"
         scheme = ws.stem if ws else app.name
@@ -171,11 +175,16 @@ class IOSNativeProvider:
         dd = f"/tmp/iosnative-{app.parent.name}"
         code, o = _sh(f'{mobile.UTF8}; [ -f Podfile ] && pod install || true; '
                       f'xcodebuild {flag} {ws.name if ws else scheme} -scheme {scheme} -configuration Debug '
-                      f'-sdk iphonesimulator -derivedDataPath {dd} -quiet build', cwd=str(app))
+                      f"-sdk iphonesimulator -destination 'generic/platform=iOS Simulator' "
+                      f'-derivedDataPath {dd} -quiet build', cwd=str(app))
         appbin = next(Path(f"{dd}/Build/Products").glob("Debug-iphonesimulator/*.app"), None) if code == 0 else None
-        p = str(demo / "ios.png"); ok = mobile.install_launch_shot_ios(str(appbin), p) if appbin else False
+        # Pass the PROJECT-derived bundle id so a plist that still lacks CFBundleIdentifier can't silently
+        # fall through, and hand it back as appId so the demo stage can arm the mobile LOGIN gate.
+        bid = resolve_app_id("ios", app)
+        p = str(demo / "ios.png")
+        ok = mobile.install_launch_shot_ios(str(appbin), p, bundle=bid) if appbin else False
         subprocess.run(["rm", "-rf", dd], capture_output=True)
-        return {"ios": {"ok": ok, "path": p, "buildExit": code, "tail": mobile._tail(o)}}
+        return {"ios": {"ok": ok, "path": p, "buildExit": code, "appId": bid, "tail": mobile._tail(o)}}
 
 
 _REGISTRY = {"rn": RNProvider, "flutter": FlutterProvider,
@@ -273,7 +282,10 @@ def login_and_shot(platform: str, app_id: str, email: str, password: str, out_pn
            "-e", f"PASSWORD={password}", "-e", f"SUBMIT={submit}", "-e", f"ROLE={role}"]
     src = Path("/tmp/mobile-loggedin.png"); src.unlink(missing_ok=True)
     try:
-        p = subprocess.run(cmd, text=True, capture_output=True, timeout=180,
+        # 300s not 180s: the flow now TYPES credentials (several tap/erase/input round-trips) and the
+        # device has usually sat idle through the other platform's build, so first interaction is slow.
+        # A too-tight timeout surfaced as "login flow timed out" — indistinguishable from a broken app.
+        p = subprocess.run(cmd, text=True, capture_output=True, timeout=300,
                            env={**os.environ, "PATH": os.path.expanduser("~/.maestro/bin:") + os.environ.get("PATH", "")})
         rc, tail = p.returncode, (p.stdout or "")[-200:]
     except subprocess.TimeoutExpired:
@@ -303,10 +315,19 @@ def resolve_ios_bundle(app_dir) -> str | None:
 
 
 def resolve_app_id(kind: str, app_dir) -> str | None:
-    """Read the mobile app's package/bundle id from the built app (for Maestro's appId), per stack."""
+    """Read the mobile app's package/bundle id from the project (for Maestro's appId), per stack.
+
+    This id is what ARMS the demo stage's mobile LOGIN behavioral gate — when it returns None the gate
+    is silently skipped, so an app that launches but cannot sign in sails through. Two layouts used to
+    return None unconditionally, disabling that gate for every native-mobile use case:
+      * native Android Compose keeps `applicationId` in `app/build.gradle.KTS` — the list had the RN/
+        Flutter path (`android/app/build.gradle.kts`) and the groovy `app/build.gradle`, but not that one.
+      * native iOS was never handled at all — the bundle id lives in `*.xcodeproj/project.pbxproj` as
+        PRODUCT_BUNDLE_IDENTIFIER, and nothing here ever looked."""
     app_dir = Path(app_dir)
     for g in (app_dir / "android/app/build.gradle", app_dir / "android/app/build.gradle.kts",
-              app_dir / "app/build.gradle", app_dir / "build.gradle"):
+              app_dir / "app/build.gradle", app_dir / "app/build.gradle.kts",
+              app_dir / "build.gradle", app_dir / "build.gradle.kts"):
         if g.exists():
             for line in g.read_text().splitlines():
                 if "applicationId" in line and ('"' in line or "'" in line):
@@ -316,7 +337,16 @@ def resolve_app_id(kind: str, app_dir) -> str | None:
     if aj.exists():
         import json
         d = json.loads(aj.read_text()).get("expo", {})
-        return (d.get("android", {}).get("package") or d.get("ios", {}).get("bundleIdentifier"))
+        got = (d.get("android", {}).get("package") or d.get("ios", {}).get("bundleIdentifier"))
+        if got:
+            return got
+    for proj in sorted(app_dir.glob("*.xcodeproj")):   # native iOS (Swift) — read the pbxproj
+        pbx = proj / "project.pbxproj"
+        if pbx.exists():
+            for m in re.finditer(r"PRODUCT_BUNDLE_IDENTIFIER\s*=\s*\"?([\w.\-]+)\"?\s*;", pbx.read_text()):
+                bid = m.group(1)
+                if not bid.endswith((".Tests", ".UITests", "Tests")):   # skip test targets
+                    return bid
     return None
 
 
