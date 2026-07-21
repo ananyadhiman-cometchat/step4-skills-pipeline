@@ -250,7 +250,7 @@ def _only_filter(comps):
     return kept
 
 
-def _spec_depth_check(text: str) -> tuple[bool, list[str]]:
+def _spec_depth_check(text: str, uc: dict | None = None) -> tuple[bool, list[str]]:
     """Gate the generated spec against the DEPTH STANDARD (requirements.md.tmpl §A-E). A spec that only
     pins the fixed login→chat→call flow with a thin seed silently produces a SHALLOW app (the pipeline
     gates on compiles+boots, not depth). Lenient, synonym-tolerant markers — a spec that actually follows
@@ -266,6 +266,12 @@ def _spec_depth_check(text: str) -> tuple[bool, list[str]]:
         "image/media chat message": any(w in t for w in ("image message", "media message", "image/media")),
         "empty/loading/error UI states": "empty" in t and "loading" in t and ("retry" in t or "error state" in t),
     }
+    # Per-UC mandatory features are as binding as A-E — if the UC declares a GROUP-chat feature, the spec
+    # must actually cover a group (a groups list + group conversation/call), not just 1:1.
+    feats = (uc or {}).get("features", "").lower()
+    if "group" in feats:
+        checks["group chat (groups list + group conversation/call)"] = "group" in t and any(
+            w in t for w in ("group chat", "group conversation", "group call", "groups list", "group thread"))
     missing = [k for k, ok in checks.items() if not ok]
     return (not missing, missing)
 
@@ -286,7 +292,7 @@ def _generate_spec_with_depth(S, uc, req_file, repo, max_tries: int = 2) -> bool
                                    log_dir=repo / "_logs")
         if not (req_file.exists() and req_file.stat().st_size > 200):
             continue
-        ok, missing = _spec_depth_check(req_file.read_text())
+        ok, missing = _spec_depth_check(req_file.read_text(), uc)
         obs.event(S, uc["slug"], "preflight", "spec_depth", attempt=attempt, ok=ok, missing=missing)
         if ok:
             if attempt:

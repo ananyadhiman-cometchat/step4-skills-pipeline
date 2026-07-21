@@ -44,11 +44,18 @@ def _tmpl(name: str) -> str:
 def render_requirements(settings, uc: dict) -> str:
     comps = expand_components(uc)
     non_backend = [c["name"] for c in comps if c["kind"] != "backend"]
+    # Per-UC mandatory features (e.g. cre = group chat) — injected on top of the generic DEPTH STANDARD.
+    # Empty for UCs that don't declare `features`, so the section simply disappears for them.
+    feats = (uc.get("features") or "").strip()
+    features_block = (
+        f"\nUSE-CASE-SPECIFIC MANDATORY FEATURES ({uc['slug']}) — enforce these IN ADDITION to the DEPTH "
+        f"STANDARD; they are as non-negotiable as A-E:\n  {feats}\n") if feats else ""
     return _tmpl("requirements.md.tmpl").format(
         name=uc["name"], slug=uc["slug"], Slug=uc["slug"].capitalize(),
         web=uc.get("web", "(Flutter web)"),
         mobile=uc.get("mobile") or uc.get("app") or f"{uc.get('android','')}/{uc.get('ios','')}",
         backend=uc["backend"],
+        features=features_block,
         a=non_backend[0] if non_backend else "client",
         b=non_backend[1] if len(non_backend) > 1 else "")
 
