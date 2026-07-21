@@ -71,8 +71,17 @@ try {
     const clog = []
     callee.on('console', m => { const t = m.text(); if (/call|session|webrtc|ice|token|error|fail/i.test(t)) clog.push('CE:' + t.slice(0, 120)) })
     caller.on('console', m => { const t = m.text(); if (/call|session|webrtc|ice|token|error|fail/i.test(t)) clog.push('CR:' + t.slice(0, 120)) })
-    const accept = callee.getByText('Accept', { exact: true }).first()
-    await accept.click({ timeout: 5000 })
+    // Click the kit's real accept control. The incoming-call component renders the accept action as
+    // `.cometchat-incoming-call__button-accept` (an icon+label button whose text node is not exactly
+    // "Accept"), so getByText('Accept', {exact:true}) can miss it and time out even though the ring is
+    // up and a human could click it. Prefer the stable class, fall back to text/role.
+    const accept = callee.locator('.cometchat-incoming-call__button-accept, [class*="button-accept" i]').first()
+    const acceptFallback = callee.getByRole('button', { name: /accept/i }).first()
+    if (await accept.count() > 0) {
+      await accept.click({ timeout: 6000 })
+    } else {
+      await acceptFallback.click({ timeout: 6000 })
+    }
     R.calleeAccepted = true
     R.acceptedAt = Math.floor(Date.now() / 1000)   // epoch s — the runner reads CometChat's server "answered" after this
     // Capture the ongoing frame at ~2s, while the (fake-media) stream is briefly up, so the vision

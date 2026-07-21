@@ -181,3 +181,27 @@
   (`mobile-incoming-<plat>-*`, `mobile-ongoing-<plat>-*` from twoparty_mobile) and content-hash-dedups
   so a stale/duplicated shot (twoparty_mobile's pull_shot copies a leftover /tmp capture when the
   accept flow finds no widget) can't appear under two platforms.
+
+## Contact directory "messed up" — avatar collisions + junk users (fin, 2026-07-21)
+
+<!-- codegen:pravatar-u-seed-collision -->
+- **`coverageGap:`** Seed-data codegen sets user avatars to `https://i.pravatar.cc/150?u=<uid>`.
+  pravatar hashes the `?u` seed onto only ~70 images, so different uids COLLIDE onto the SAME face —
+  `fin-usr-002` (Bob) and `fin-usr-003` (Carol) resolved to byte-identical images, so two different
+  contacts showed the same avatar in chat and the directory looked "messed up". Fix: use EXPLICIT
+  distinct `?img=N` numbers (1–70), which also lets you gender-match names. Applied to fin's seeder;
+  the codegen prompt/seed guidance should mandate `?img=N` (never `?u=<seed>`) app-wide.
+
+<!-- harness:cometchat-sample-users-pollute-directory -->
+- **`coverageGap:`** A freshly-provisioned (trial) CometChat app ships with 5 DEFAULT sample users —
+  `cometchat-uid-1..5` (Andrew Joseph, George Alan, Nancy Grace, Susan Marie, John Paul). They appear
+  in the app's Contacts directory alongside the real demo users, so a real customer sees five fake
+  strangers. provision-app should DEACTIVATE these sample users right after creating/attaching the
+  app. (Deactivated by hand for fin: DELETE /v3/users/<uid>.)
+
+<!-- harness:synthetic-probe-users-pollute-directory -->
+- **`coverageGap:`** verify's out-of-band chat pair (`fin-cha-001`/`fin-chb-001` = "Chat Alpha/Beta")
+  and the moderation probes (`fin-moda-001`/`fin-modb-001` = "Mod ProbeA/B") are created in CometChat
+  and never cleaned up, so they also pollute the demo Contacts directory — and a subsequent verify/demo
+  run RECREATES them. Probes should deactivate their synthetic users after use (or run against the real
+  demo accounts). (Deactivated by hand for fin.)
