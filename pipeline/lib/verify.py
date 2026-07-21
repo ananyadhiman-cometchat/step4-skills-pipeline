@@ -396,10 +396,16 @@ def run_chatcall_web(repo_dir: Path, email: str, password: str, web_url: str, sh
         return {"error": "no web/ or e2e script"}
     # copy into web/ so `import '@playwright/test'` resolves against web/node_modules (ESM resolves by script path)
     dst = web / "_chatcall_verify.mjs"
-    dst.write_text(src.read_text())
+    # chatcall.web.mjs imports the shared headed-browser launcher `./browser.mjs`; that relative import
+    # must be copied alongside (under a `_`-prefixed name) and rewritten, exactly like the two-party copy
+    # site does. Without this the script dies with ERR_MODULE_NOT_FOUND before it can set sdkReady, so
+    # verify reports sdk=False even when chat + calls actually work — a pure harness false negative.
+    (web / "_browser.mjs").write_text((src.parent / "browser.mjs").read_text())
+    dst.write_text(src.read_text().replace("from './browser.mjs'", "from './_browser.mjs'"))
     env = {"E2E_EMAIL": email, "E2E_PASSWORD": password, "WEB_URL": web_url, "SHOT": shot}
     code, out = _run(["node", str(dst)], cwd=str(web), timeout=180, env=env)
     dst.unlink(missing_ok=True)
+    (web / "_browser.mjs").unlink(missing_ok=True)
     for line in reversed((out or "").splitlines()):
         line = line.strip()
         if line.startswith("{"):
