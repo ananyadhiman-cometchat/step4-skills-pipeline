@@ -205,3 +205,17 @@
   and never cleaned up, so they also pollute the demo Contacts directory — and a subsequent verify/demo
   run RECREATES them. Probes should deactivate their synthetic users after use (or run against the real
   demo accounts). (Deactivated by hand for fin.)
+
+## Web account-switch showed the previous user's chat (fin, 2026-07-21)
+
+<!-- app:web-logout-doesnt-clear-cometchat -->
+- **`coverageGap:`** The web app's `logout()` (Pinia auth store) only cleared its own localStorage
+  tokens and NEVER called `CometChatUIKit.logout()`. Combined with the island's `loginOnce`, which
+  returned early if ANY user was already logged into the CometChat SDK, switching accounts in the same
+  browser left the PREVIOUS user's SDK session live — so the new user's chat rendered the previous
+  user's conversations/contacts under scrambled names (reported as "I send to Alice from Bob and it
+  goes to Carol"). Fix: pass the current app user's uid into ReactChatApp and have `loginOnce` compare
+  it to `getLoggedinUser().getUid()` — if they differ, `CometChatUIKit.logout()` then log the new user
+  in. Verified: Alice→(sign out)→Bob in one browser now shows BOB's conversations. Any Vue/React-island
+  integration that logs out via app state (not the kit) has this bug — the login path must reconcile
+  the SDK session against the intended uid.
