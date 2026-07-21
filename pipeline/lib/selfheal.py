@@ -435,9 +435,17 @@ def _fix_ios_calls_sdk_version(ctx) -> tuple[bool, str]:
     if added:
         return True, (f"ADDED CometChatCallsSDK '~> 5.0' to {added} Podfile(s) (was absent → calls engine "
                       f"unlinked)" + (f"; bumped 4.x in {patched}" if patched else ""))
-    if not patched:
-        return False, "CometChatCallsSDK not pinned to 4.x (nothing to bump)"
-    return True, f"pinned CometChatCallsSDK '~> 5.0' (was 4.x) in {patched} Podfile(s)"
+    if patched:
+        return True, f"pinned CometChatCallsSDK '~> 5.0' (was 4.x) in {patched} Podfile(s)"
+    # Present and ALREADY on the 5.0 line: nothing to change, but the guard IS satisfied for this
+    # native-iOS + calls stack, so report success so the SDK-gap WITNESS is still recorded. The 4.x
+    # in-call crash is why the pin must be here, whether we, codegen, or a prior run put it there —
+    # an idempotent-satisfied guard that returned False here silently dropped a real, recurring gap
+    # from the ledger (the "self-heal forgot to add the repeating gap" bug).
+    if any(re.search(r"pod\s+['\"]CometChatCallsSDK['\"]\s*,\s*['\"](?:~>\s*)?5[\d.]*['\"]", pf.read_text())
+           for pf in pods):
+        return True, "CometChatCallsSDK already pinned to the 5.0 line (workaround present)"
+    return False, "CometChatCallsSDK present but not on 4.x or 5.x (nothing to do)"
 
 
 # The bundle keys Xcode auto-injects ONLY when GENERATE_INFOPLIST_FILE=YES. A project that points
@@ -958,7 +966,15 @@ def preapply(ctx: dict) -> list[dict]:
             ok, detail = r["fix"](ctx)
             if ok:
                 applied.append({"rule": r["id"], "detail": detail, "note": r["note"], "owner": r.get("owner")})
-                _record_finding(ctx, r, detail, "proactive guard — pre-empts the known failure signature")
+            # Record the finding when the guard applied a change (ok) OR when it reports the workaround
+            # is ALREADY present ("already ..."). A proactive guard whose workaround is already
+            # satisfied — by codegen, a prior run, or a manual edit — must STILL document its recurring
+            # gap: the gap (an SDK crash, a skill omission) is inherent to the stack, not to whether we
+            # had to repair it this run. Gating recording on `ok` alone made self-heal silently "forget"
+            # any recurring gap it didn't actively fix this pass. "not applicable" details ("no app dir",
+            # "does not use calls", "not an android project") are correctly skipped.
+            if ok or "already" in str(detail).lower():
+                _record_finding(ctx, r, detail, "proactive guard — workaround present for this stack")
     return applied
 
 
