@@ -65,9 +65,12 @@ Produce a single markdown spec with these sections (concise, concrete, no fluff)
    Seed/test emails MUST use a real, non-reserved domain (e.g. user@{slug}.io). Do NOT use
    .test/.example/.invalid/.local/.localhost —
    strict validators (Pydantic EmailStr, etc.) reject reserved TLDs and login will 422 on the app's own seed data.
-   The seed MUST ALSO include two FIXED automated-call-test users (the harness logs in as these across
-   ALL use cases): email `chat-a@{slug}.io` uid `{slug}-cha-001`, and `chat-b@{slug}.io` uid `{slug}-chb-001`,
-   both ordinary users, password = the shared seed password. They must be able to open a 1:1 conversation.
+   The automated chat/call proof runs as the app's OWN demo accounts named in the use case's `chatPair`
+   (set in use_cases.json) — REAL personas a real user would use. Do NOT invent harness-only test users:
+   NEVER seed `chat-a@{slug}.io`/`chat-b@{slug}.io` or `{slug}-cha-001`/`{slug}-chb-001` (the harness BANS
+   those — they rig the chat proof and pollute the real contact directory that other users see). Instead,
+   nominate TWO of your seeded demo personas as the chat/call pair, ensure they can open a 1:1 conversation
+   (with the shared seed password), and make sure they are the two accounts listed in `chatPair`.
    **The shared seed password MUST be EXACTLY `{Slug}@seed2026!`** (slug with its first letter capitalised —
    e.g. slug `dat` → `Dat@seed2026!`, `com` → `Com@seed2026!`). Use this SAME literal in the backend
    `SEED_PASSWORD`, in every client's demo quick-fill buttons, and anywhere else the seed password appears —
