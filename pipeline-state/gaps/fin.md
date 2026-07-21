@@ -172,7 +172,7 @@
      `.fullScreenCover`/ZStack-sibling of a TabView, never runs its SwiftUI render pass on iOS 26.
      Also disable `enable(inAppIncomingCall: true)` so the kit's own (empty) auto-present doesn't
      occupy the presentation slot. Verified end-to-end: Android(Alice)→iOS(Bob) rings, Accept
-     connects, both peers live (iOS ongoing surface renders fine — only the INCOMING VC was broken).
+     connects, both peers live (iOS ongoing surface renders fine — only the INCOMING VC was broken). iOS OUTGOING also verified end-to-end this session (iOS Bob places → Android Alice rings → accept → both live, 00:52 timer, both audio tiles); the earlier 'Missed Call' was accept-tap timing in automation, not an app defect.
 
 <!-- harness:gallery-per-platform-call-shots -->
 - **`falseTrigger:` (harness)** demo_gallery.py appended the SAME web-captured call screenshots
