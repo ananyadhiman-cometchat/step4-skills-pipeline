@@ -113,12 +113,16 @@ def call_answered(env_file, slug, since_ts, poll_s: int = 12, uid: str | None = 
     Polls briefly because the server-side action lands a beat after the client accepts.
     Returns {answered, action?, sentAt?}. This is the anti-flake verdict for the headless call e2e.
 
-    The reader uid defaults to the use case's ACTUAL web call-test uid (call_test_accounts) — the old
-    hardcoded `{slug}-buy-001` exists only for mkt, so for every other use case this check silently
-    returned answered=False and the 'media-independent anchor' was a no-op."""
+    The reader uid MUST be a real participant in the call — callers pass the resolved chatPair uid.
+    For mkt/del it can fall back to their override demo account; for any other use case with no uid we
+    return answered=None (cannot determine — never invent a chat-a/chat-b reader), which the verdict
+    treats as non-vetoing rather than a false 'not answered'."""
     import time
     cfg = _cfg(env_file)
-    reader = uid or call_test_accounts(slug)["web"][1]
+    _ov = call_test_accounts(slug)
+    reader = uid or (_ov["web"][1] if _ov else None)
+    if not reader:
+        return {"answered": None, "note": "no reader uid (pass the chatPair participant's uid)"}
     url = f"{_api(cfg)}/messages?per_page=40&category=call"
     deadline = time.time() + poll_s
     while True:
@@ -146,12 +150,13 @@ CALL_TEST_OVERRIDE = {
 }
 
 
-def call_test_accounts(slug: str) -> dict:
-    """Return {'mobile': (email, uid, name), 'web': (email, uid, name)} for the call matrix."""
-    if slug in CALL_TEST_OVERRIDE:
-        return CALL_TEST_OVERRIDE[slug]
-    return {"mobile": (f"chat-a@{slug}.io", f"{slug}-cha-001", "Chat A"),
-            "web":    (f"chat-b@{slug}.io", f"{slug}-chb-001", "Chat B")}
+def call_test_accounts(slug: str) -> dict | None:
+    """Real per-UC call-test accounts (mkt/del map chat/call to their OWN demo personas). Returns None
+    for any other use case — the pair there comes from `uc['chatPair']` (two of the app's own seeded
+    accounts), resolved by seed_and_resolve_pair. There is DELIBERATELY no invented chat-a/chat-b
+    fallback: synthetic users rig the chat proof and pollute the real contact directory, and the harness
+    bans an app from seeding them (verify.SYNTHETIC_SEED_ACCOUNTS)."""
+    return CALL_TEST_OVERRIDE.get(slug)
 
 
 def app_login(backend_url: str, email: str, password: str) -> dict:
@@ -194,7 +199,10 @@ def seed_and_resolve_pair(env_file: str, uc: dict, backend_url: str, password: s
     # it silently let this exact false-positive through for the 8/10 use cases that have no chatPair.
     pair = uc.get("chatPair")
     if not (pair and len(pair) >= 2):
-        pair = [f"chat-b@{slug}.io", f"chat-a@{slug}.io"]   # web/receiver, mobile/sender (seeded per spec)
+        # NO synthetic fallback. A UC without a chatPair must fail LOUDLY (the caller die_gates), never
+        # silently invent chat-a/chat-b — that rigged the chat proof and polluted the contact directory.
+        return {"web": (None, None, None), "mobile": (None, None, None), "ok": False,
+                "mode": "no-chatpair", "loginError": "use_cases.json is missing chatPair for this UC"}
     a = app_login(backend_url, pair[0], password)   # web / receiver
     b = app_login(backend_url, pair[1], password)   # mobile / sender
     if a.get("uid") and b.get("uid"):
@@ -207,19 +215,3 @@ def seed_and_resolve_pair(env_file: str, uc: dict, backend_url: str, password: s
                 "ok": sm in (200, 201), "mode": "app-demo-accounts", "logins": {"a": a, "b": b}}
     return {"web": (pair[0], a.get("uid"), None), "mobile": (pair[1], b.get("uid"), None),
             "ok": False, "mode": "app-demo-accounts", "loginError": {"a": a, "b": b}}
-
-
-def seed_conversation(env_file, slug) -> dict:
-    """Seed the two call-test users + a message between them → a real conversation to test. Uses the
-    per-UC call_test_accounts so this works for ANY use case, not just the mkt buyer/seller pair."""
-    cfg = _cfg(env_file)
-    acc = call_test_accounts(slug)
-    (m_email, m_uid, m_name) = acc["mobile"]
-    (w_email, w_uid, w_name) = acc["web"]
-    r = {"mobile": create_user(cfg, m_uid, m_name, [f"uc:{slug}", "role:calltest"]),
-         "web": create_user(cfg, w_uid, w_name, [f"uc:{slug}", "role:calltest"]),
-         "seedMessage": send_message(cfg, w_uid, m_uid, "Hi! (automated call-test seed)")}
-    r["ok"] = r["mobile"] in (200, 201) and r["web"] in (200, 201) and r["seedMessage"] in (200, 201)
-    r["mobileUid"], r["webUid"] = m_uid, w_uid
-    r["buyerUid"], r["sellerUid"] = w_uid, m_uid   # legacy aliases
-    return r

@@ -8,7 +8,7 @@ const PW = process.env.E2E_PASSWORD || 'Mkt@seed2026!'
 const WEB = process.env.WEB_URL || 'http://localhost:3000'
 const SHOT = process.env.SHOT || ''
 
-const R = { login: false, sdkReady: false, seedMsgVisible: false, composerFound: false, msgSent: false, callUI: false }
+const R = { login: false, sdkReady: false, threadHasHistory: false, composerFound: false, msgSent: false, callUI: false }
 const b = await launchForCalls()
 const p = await b.newPage({ viewport: { width: 1280, height: 900 } })
 const errs = []
@@ -28,8 +28,12 @@ try {
                (await p.locator('.cometchat-conversations, .cometchat-conversations__list').count()) > 0
   await p.locator('.cometchat-conversation-item, .cometchat-conversations__list-item-wrapper, .cometchat-conversations__list-item, .cometchat-list-item').first().click()
   await p.waitForTimeout(3500)
-  // the ACTUAL seeded message text (cometchat.seed_conversation), not a coincidental /camera/ substring
-  R.seedMsgVisible = (await p.getByText('automated call-test seed', { exact: false }).count()) > 0
+  // The opened thread already has message history — the app seeds a few messages between the chatPair
+  // personas, so a real (non-empty) conversation shows bubbles on open. Informational only; NOT a gate,
+  // because whether THIS pair's thread is pre-seeded is a spec choice, and round-tripping our OWN message
+  // (msgSent) is the load-bearing proof. (Was a hard check for the deleted synthetic seed_conversation
+  // string 'automated call-test seed' — that account no longer exists, real demo accounts are used.)
+  R.threadHasHistory = (await p.locator('.cometchat-message-bubble, [class*="message-bubble" i], .cometchat-message-list__message-container').count()) > 0
   const input = p.locator('.cometchat-message-composer [contenteditable="true"], .cometchat-message-composer__input, .cometchat-message-composer textarea').first()
   R.composerFound = (await input.count()) > 0
   const msg = 'Yes it is available! (e2e ' + Date.now().toString().slice(-5) + ')'
@@ -47,7 +51,9 @@ try {
   if (SHOT) await p.screenshot({ path: SHOT })
 } catch (e) { R.error = String(e).slice(0, 160) }
 R.pageErrors = errs.slice(0, 5)
-R.chatWorks = R.login && R.seedMsgVisible && R.msgSent
+// chat is proven by: logged in + the CometChat SDK actually initialised (conversation list rendered) +
+// we round-tripped our OWN message (typed → rendered in the thread). No dependency on a pre-seeded string.
+R.chatWorks = R.login && R.sdkReady && R.msgSent
 R.callWorks = R.callUI
 console.log(JSON.stringify(R))
 await b.close()

@@ -50,12 +50,23 @@ def render_requirements(settings, uc: dict) -> str:
     features_block = (
         f"\nUSE-CASE-SPECIFIC MANDATORY FEATURES ({uc['slug']}) — enforce these IN ADDITION to the DEPTH "
         f"STANDARD; they are as non-negotiable as A-E:\n  {feats}\n") if feats else ""
+    # Pin the EXACT chatPair emails the harness will drive, so codegen seeds precisely those accounts.
+    # Without this the spec only knows "nominate two personas" and can name any emails — which then don't
+    # match the config's chatPair, and verify's seed_and_resolve_pair can't log them in.
+    cp = uc.get("chatPair") or []
+    chatpair_block = (
+        f"\n   THIS use case's `chatPair` (from use_cases.json) is EXACTLY [`{cp[0]}`, `{cp[1]}`]. SEED both "
+        f"as ordinary demo personas with roles that fit \"{uc['name']}\" — each with the shared seed password "
+        f"and a real `avatar_url` — and make sure the two can open a 1:1 conversation. `{cp[0]}` is the "
+        f"web/receiver, `{cp[1]}` is the mobile/sender. Use these LITERAL emails; do not rename them."
+    ) if len(cp) >= 2 else ""
     return _tmpl("requirements.md.tmpl").format(
         name=uc["name"], slug=uc["slug"], Slug=uc["slug"].capitalize(),
         web=uc.get("web", "(Flutter web)"),
         mobile=uc.get("mobile") or uc.get("app") or f"{uc.get('android','')}/{uc.get('ios','')}",
         backend=uc["backend"],
         features=features_block,
+        chatpair=chatpair_block,
         a=non_backend[0] if non_backend else "client",
         b=non_backend[1] if len(non_backend) > 1 else "")
 
