@@ -1,7 +1,7 @@
 > **UC5 · Fintech support (`fin`)** — fintech customer-support: real-time support chat + calls between customers and agents.
 > **Stack:** Vue 3 web · Android (Kotlin/Compose, UI Kit v6) · iOS (native Swift) · Java (Spring) backend — **3 separate codebases**.
-> **CometChat:** ⚠️ **no `cometchat-vue` skill exists** (known, pre-seeded gap — expect none to fire on the Vue slice) · Android v6 Compose · iOS Swift + Calls SDK. _**In progress** — ledger still filling._
-> **Gaps recorded: 22.** _Source: `pipeline-state/gaps/fin.md` — edit there, not here._
+> **CometChat:** ⚠️ **no `cometchat-vue` skill exists** (known gap) → React UI Kit + Calls SDK mounted as a **React island** inside Vue · Android v6 Compose · iOS Swift + Calls SDK. *Most iOS incoming-call + web session-lifecycle gaps.*
+> **Gaps recorded: 14.** _Source: `pipeline-state/gaps/fin.md` — edit there, not here._
 
 ---
 
@@ -102,41 +102,6 @@
     made this indistinguishable from a credentials or payload error.
 
 ## Harness defects found by driving the real clients (fin, 2026-07-20)
-
-<!-- harness:android-cometchat-creds -->
-- **`coverageGap:`** Native-Android codegen reads the CometChat credentials out of `local.properties`
-  (`localProps.getProperty("cometchat.appId", "")`), but **nothing in the pipeline ever wrote those
-  keys** — and two writers (`lib/providers.py` AndroidNativeProvider.demo, `lib/mobile.py`
-  build_android) truncated the file to `sdk.dir=` on every run. Every fin APK therefore shipped with
-  `BuildConfig.COMETCHAT_APP_ID == ""`, logged "CometChat credentials not configured — chat disabled",
-  skipped init, and then **hard-crashed the process** on the first SDK call: `CometChat.getLoggedInUser()`
-  and `CometChatUIKit.logout()` THROW ("Please call the CometChat.init() method ...") instead of
-  returning null/erroring via their callback. Opening the Chat tab or tapping Sign Out threw the user
-  to the launcher. Android chat had **never once worked** on this use case.
-  - _why verify missed it_: verify proves chat on **web** only; the android leg was never driven, so a
-    client that could not initialise chat at all still passed every gate.
-  - _fix_: `mobile.write_android_local_properties()` — merges instead of clobbering and injects
-    `cometchat.appId/region/authKey` from the UC's `.env.cometchat`; warns when appId resolves empty.
-
-<!-- harness:mobile-incall-screencap -->
-- **`falseTrigger:`** `adb screencap` captures the Android in-call screen as a **fully black frame** —
-  the CometChat ongoing-call surface is a hardware/WebRTC surface that screencap cannot read. The call
-  was genuinely connected at the time (web peer showed both participants + audio activity; the android
-  view hierarchy showed "Ongoing call", both participant tiles and a running 01:03 timer matching the
-  web timer). **Any vision rubric gated on a mobile in-call SCREENSHOT is a guaranteed false negative.**
-  Grade mobile call state from the view hierarchy (`uiautomator dump`) or the peer, never the shot.
-  Same class as the existing headless-web call carve-out, different platform.
-
-<!-- harness:ios-cometchat-creds -->
-- **`coverageGap:`** The iOS twin of the Android credentials gap. Codegen wires `Info.plist` to
-  `$(COMETCHAT_APP_ID)` and reads it via `Bundle.main.infoDictionary`, but scaffolds the xcode build
-  settings as `COMETCHAT_APP_ID = ""` / `COMETCHAT_AUTH_KEY = ""` and **nothing ever filled them in**.
-  The empty setting substitutes into the plist as an empty string → `AppConfig.cometchatAppID` is nil
-  → CometChat never initialises → the chat tab renders the kit's generic **"Oops! Looks like
-  something went wrong."**, which reads as a broken UI rather than as missing credentials.
-  - _fix_: `mobile.write_ios_cometchat_settings()` patches the pbxproj (Debug AND Release) from the
-    UC's `.env.cometchat`, so Xcode-driven builds get the same creds as pipeline-driven ones.
-
 <!-- sdk:ios-header-call-buttons -->
 - **`SDK-gap:`** On the explicit-pod iOS calls setup (`CometChatCallsSDK` as its own pod, initialised
   by hand), `CometChatMessageHeader` renders **no call buttons** and there is no supported way to add
@@ -160,7 +125,6 @@
   this app does not do. **iOS is send-capable but not connect-capable until that is resolved.**
 
 ## iOS incoming calls RESOLVED + gallery per-platform shots (fin, 2026-07-21)
-
 <!-- resolved:ios-incoming-call -->
 - **`SDK-gap:` (RESOLVED)** iOS received NO incoming calls (no ring/toast) though chat + outgoing
   worked. TWO stacked causes, both non-obvious:
@@ -181,40 +145,7 @@
      occupy the presentation slot. Verified end-to-end: Android(Alice)→iOS(Bob) rings, Accept
      connects, both peers live (iOS ongoing surface renders fine — only the INCOMING VC was broken). iOS OUTGOING also verified end-to-end this session (iOS Bob places → Android Alice rings → accept → both live, 00:52 timer, both audio tiles); the earlier 'Missed Call' was accept-tap timing in automation, not an app defect.
 
-<!-- harness:gallery-per-platform-call-shots -->
-- **`falseTrigger:` (harness)** demo_gallery.py appended the SAME web-captured call screenshots
-  (`callee-ringing-*`, `caller-ongoing-*`) to BOTH the Android and iOS sections — the browser call UI
-  shown under an "Android"/"iOS" heading. Now reads the REAL per-platform mobile captures
-  (`mobile-incoming-<plat>-*`, `mobile-ongoing-<plat>-*` from twoparty_mobile) and content-hash-dedups
-  so a stale/duplicated shot (twoparty_mobile's pull_shot copies a leftover /tmp capture when the
-  accept flow finds no widget) can't appear under two platforms.
-
-## Contact directory "messed up" — avatar collisions + junk users (fin, 2026-07-21)
-
-<!-- codegen:pravatar-u-seed-collision -->
-- **`coverageGap:`** Seed-data codegen sets user avatars to `https://i.pravatar.cc/150?u=<uid>`.
-  pravatar hashes the `?u` seed onto only ~70 images, so different uids COLLIDE onto the SAME face —
-  `fin-usr-002` (Bob) and `fin-usr-003` (Carol) resolved to byte-identical images, so two different
-  contacts showed the same avatar in chat and the directory looked "messed up". Fix: use EXPLICIT
-  distinct `?img=N` numbers (1–70), which also lets you gender-match names. Applied to fin's seeder;
-  the codegen prompt/seed guidance should mandate `?img=N` (never `?u=<seed>`) app-wide.
-
-<!-- harness:cometchat-sample-users-pollute-directory -->
-- **`coverageGap:`** A freshly-provisioned (trial) CometChat app ships with 5 DEFAULT sample users —
-  `cometchat-uid-1..5` (Andrew Joseph, George Alan, Nancy Grace, Susan Marie, John Paul). They appear
-  in the app's Contacts directory alongside the real demo users, so a real customer sees five fake
-  strangers. provision-app should DEACTIVATE these sample users right after creating/attaching the
-  app. (Deactivated by hand for fin: DELETE /v3/users/<uid>.)
-
-<!-- harness:synthetic-probe-users-pollute-directory -->
-- **`coverageGap:`** verify's out-of-band chat pair (`fin-cha-001`/`fin-chb-001` = "Chat Alpha/Beta")
-  and the moderation probes (`fin-moda-001`/`fin-modb-001` = "Mod ProbeA/B") are created in CometChat
-  and never cleaned up, so they also pollute the demo Contacts directory — and a subsequent verify/demo
-  run RECREATES them. Probes should deactivate their synthetic users after use (or run against the real
-  demo accounts). (Deactivated by hand for fin.)
-
 ## Web account-switch showed the previous user's chat (fin, 2026-07-21)
-
 <!-- app:web-logout-doesnt-clear-cometchat -->
 - **`coverageGap:`** The web app's `logout()` (Pinia auth store) only cleared its own localStorage
   tokens and NEVER called `CometChatUIKit.logout()`. Combined with the island's `loginOnce`, which
@@ -227,15 +158,7 @@
   integration that logs out via app state (not the kit) has this bug — the login path must reconcile
   the SDK session against the intended uid.
 
-<!-- security:ios-authkey-in-tracked-pbxproj -->
-- **`coverageGap:`** The iOS build-time creds fix injected COMETCHAT_AUTH_KEY into the TRACKED
-  `project.pbxproj`, so the secret-scan gate correctly blocked `push-branch`. The auth key is a
-  semi-privileged secret that must never ship in a client app; the iOS client logs in with
-  server-minted auth tokens and its init skips `.set(authKey:)` when empty, so the key isn't needed
-  on-device. Fix: `write_ios_cometchat_settings` now injects only APP_ID + REGION (public identifiers)
-  and actively CLEARS COMETCHAT_AUTH_KEY in the pbxproj. Verified iOS still logs in + chats without it.
 <!-- selfheal:ios-calls-sdk-version -->
 - **`SDK-gap:`** [self-heal:ios-calls-sdk-version] The CometChat iOS Calls SDK on the 4.x line (`~> 4.1` → 4.2.3) HARD-CRASHES the moment the in-call session UI mounts on an iOS 26 simulator: EXC_BAD_ACCESS (SIGSEGV, "possible pointer authentication failure") inside CometChatCallsSDK → facebook::react::invokeInner — the React-Native bridge embedded in the Calls SDK dying in the unwinder during a native-module invoke. Call placement, ringing, signaling and WebRTC media ALL work (peer holds a live connected call); only the session screen dies (white screen ~1s → crash). Reproduces identically on the arm64 simulator AND x86_64-under-Rosetta, so it is not an arm64-PAC issue alone, and it is entirely inside SDK frames (no app code on the stack). FIX: pin `pod 'CometChatCallsSDK', '~> 5.0'` (resolves 5.0.1) — it stays compatible with CometChatSDK 4.1.6 / CometChatUIKitSwift 5.1.16 (+ WebRTC 124.0.4 + the I7 companion pods); CocoaPods resolves it cleanly and the kit's in-call UI renders. No post_install/RCTBridge workaround and no custom-view startSession(callToken:callSetting:view:) bypass is required. The commonly-stated blocker "4.2.3 is the newest CallsSDK compatible with the CometChatSDK 4.1.x line" is FALSE. IMPORTANT — do not ship the wrong reason: 5.0.1 STILL embeds React Native (RCTBridge present, ~2376 RN symbols), so "5.x removed RN" is untrue; the fix is strictly EMPIRICAL (the 5.0.1 RN build does not trip the PAC/unwinder fault on iOS 26, 4.2.3 does — which also rules out "iOS 26 PAC" as a general cause, since a newer 26.5 sim renders fine on 5.0.1). CometChat should fix the 4.2.3 crash or document that the 5.0.x Calls line is REQUIRED for iOS 26, even against the 4.1.x chat SDK. Affects every native-iOS use case. Watch-outs after the bump: (a) only the FIRST call per launch connects — subsequent calls never transition to the ongoing screen (kit state bug); (b) a separate SIGSEGV in CometChatCallBubble.setupStyle (CallType rawValue on null) when rendering a group-call history bubble.
   - _auto-repaired by the harness (fix's existence IS the finding)_: CometChatCallsSDK already pinned to the 5.0 line (workaround present)
   - _trigger evidence_: `proactive guard — pre-empts the known failure signature`
-
