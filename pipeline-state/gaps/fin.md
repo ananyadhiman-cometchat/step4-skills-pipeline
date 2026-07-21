@@ -219,3 +219,11 @@
   in. Verified: Alice→(sign out)→Bob in one browser now shows BOB's conversations. Any Vue/React-island
   integration that logs out via app state (not the kit) has this bug — the login path must reconcile
   the SDK session against the intended uid.
+
+<!-- security:ios-authkey-in-tracked-pbxproj -->
+- **`coverageGap:`** The iOS build-time creds fix injected COMETCHAT_AUTH_KEY into the TRACKED
+  `project.pbxproj`, so the secret-scan gate correctly blocked `push-branch`. The auth key is a
+  semi-privileged secret that must never ship in a client app; the iOS client logs in with
+  server-minted auth tokens and its init skips `.set(authKey:)` when empty, so the key isn't needed
+  on-device. Fix: `write_ios_cometchat_settings` now injects only APP_ID + REGION (public identifiers)
+  and actively CLEARS COMETCHAT_AUTH_KEY in the pbxproj. Verified iOS still logs in + chats without it.

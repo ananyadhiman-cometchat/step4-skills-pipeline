@@ -256,10 +256,14 @@ def write_android_local_properties(andro: Path, extra: dict | None = None) -> di
     return props
 
 
+# Only the APP_ID and REGION go into the TRACKED pbxproj — NOT the auth key. The auth key is a
+# semi-privileged secret that must never ship inside a client app (and the secret-scan gate correctly
+# blocks a push that contains it). The iOS client logs in with server-minted auth tokens
+# (CometChatUIKit.login(authToken:)), and its init already skips .set(authKey:) when the key is empty,
+# so the auth key is simply not needed on-device. APP_ID/REGION are public identifiers, safe to commit.
 _IOS_CC_SETTINGS = {
     "COMETCHAT_APP_ID": "COMETCHAT_APP_ID",
     "COMETCHAT_REGION": "COMETCHAT_REGION",
-    "COMETCHAT_AUTH_KEY": "COMETCHAT_AUTH_KEY",
 }
 
 
@@ -299,6 +303,9 @@ def write_ios_cometchat_settings(ios_dir: Path) -> dict:
     for key, val in creds.items():
         # Replace the scaffolded empty (or stale) value wherever it appears — Debug AND Release.
         txt = re.sub(rf'({re.escape(key)} = )"[^"]*";', rf'\1"{val}";', txt)
+    # Actively CLEAR the auth key from the tracked project — codegen may scaffold it, and an earlier
+    # run may have injected it before this rule existed. It must never be committed/pushed.
+    txt = re.sub(r'(COMETCHAT_AUTH_KEY = )"[^"]*";', r'\1"";', txt)
     pbx.write_text(txt)
     return creds
 
